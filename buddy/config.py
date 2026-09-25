@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     anthropic_api_key: str = ""
+    # Only for API keys not scoped to a workspace (the API then asks for this header).
+    anthropic_workspace_id: str = ""
     kid_password: str = "change-me-kid"
     parent_password: str = "change-me-parent"
     session_secret: str = ""

@@ -24,12 +24,12 @@ from buddy.ingest.index import index_chapter
 
 
 def client():
-    import anthropic
+    from buddy.llm.claude import sync_client
 
-    key = get_settings().anthropic_api_key
-    if not key:
-        sys.exit("ANTHROPIC_API_KEY is not set in .env")
-    return anthropic.Anthropic(api_key=key)
+    try:
+        return sync_client()
+    except RuntimeError as e:
+        sys.exit(str(e))
 
 
 def parse_chapters(subject: str, spec: str) -> list[int]:
@@ -198,7 +198,16 @@ def main(argv=None):
     sp.set_defaults(fn=cmd_upload)
 
     a = p.parse_args(argv)
-    a.fn(a)
+    import anthropic
+
+    try:
+        a.fn(a)
+    except anthropic.BadRequestError as e:
+        if "workspace" in str(e) and not get_settings().anthropic_workspace_id:
+            sys.exit("Your API key isn't scoped to a workspace. Add ANTHROPIC_WORKSPACE_ID=wrkspc_... "
+                     "to .env (Claude Console -> Settings -> Workspaces), or create a key "
+                     "inside a workspace.")
+        raise
 
 
 if __name__ == "__main__":

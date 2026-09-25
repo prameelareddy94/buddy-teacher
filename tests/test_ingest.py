@@ -147,3 +147,15 @@ def test_download_failure_explains_manual_route(monkeypatch):
     with pytest.raises(SystemExit) as e:
         download.download_chapter(get_book("evs"), 1)
     assert "add-pdf evs 1" in str(e.value) and "deev1dd.zip" in str(e.value)
+
+
+def test_workspace_header(monkeypatch):
+    from buddy import config
+    from buddy.llm import claude
+
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_test")
+    config.get_settings.cache_clear()
+    claude.sync_client.cache_clear()
+    claude.async_client.cache_clear()
+    assert claude.sync_client().default_headers["anthropic-workspace-id"] == "wrkspc_test"
+    assert claude.async_client().default_headers["anthropic-workspace-id"] == "wrkspc_test"
