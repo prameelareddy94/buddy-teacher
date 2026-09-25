@@ -12,6 +12,19 @@ the answer is ("EVS, Chapter 3, page 27"). Personal use only.
 | Hindi (3rd lang) | Veena (NCERT) | `dhve1`, 13 chapters, read from page images |
 | Kannada (2nd lang) | TBD (likely Karnataka Textbook Society) | drop PDFs in `data/raw/kannada/`, read from page images |
 
+Her **Class 1–3 books** are included too, because questions often go back to basics. These
+answers are cited as "EVS (Class 3), Chapter 2, page 14".
+
+| Book key | Class | Book | NCERT code |
+|---|---|---|---|
+| `evs-c3`, `english-c3`, `maths-c3`, `hindi-c3` | 3 | Our Wondrous World, Santoor, Maths Mela, Veena | `ceev1`, `cesa1`, `cemm1`, `chve1` |
+| `english-c2`, `maths-c2`, `hindi-c2` | 2 | Mridang, Joyful Mathematics, Sarangi | `bemr1`, `bejm1`, `bhsr1` |
+| `english-c1`, `maths-c1`, `hindi-c1` | 1 | Mridang, Joyful Mathematics, Sarangi | `aemr1`, `aejm1`, `ahsr1` |
+
+Classes 1–2 have no EVS book in the new NCERT syllabus. For most older books the chapter
+count isn't recorded, so `download <book> all` fetches chapters until one is missing
+(`add-zip` works too). Class 4 books use the bare subject as their key (`evs`, `maths`, ...).
+
 The school's own worksheets, notes and test papers (PDF or photos) can be uploaded from
 the parent page. Buddy then answers and makes quizzes in the school's style.
 
@@ -33,6 +46,9 @@ the parent page. Buddy then answers and makes quizzes in the school's style.
                                                      not confident / no valid page ─► Haiku 4.5
                                                    every question logged with its path + reason
 ```
+
+A fixed answer that closely matches a new question is used before any of this. Above
+`VERIFIED_DIRECT` similarity it's returned directly with no model call, so it's free.
 
 - **Kid rules** (`buddy/kid_rules.py`): answer only from the retrieved passages; simple
   words for a 9-year-old; hint first (the answer sits behind a "Show answer" button); always
@@ -90,8 +106,11 @@ python -m buddy.ingest collect <batch_id> --wait   # saves, logs cost, indexes
 ```
 
 Batches usually finish within minutes to an hour (24 h max). You can close the laptop
-between `submit` and `collect`. **Restart the server after ingesting**
-(`sudo systemctl restart buddy-teacher`) so it picks up the new chunks.
+between `submit` and `collect`. A running server picks up newly indexed chapters
+automatically; no restart needed.
+
+Older classes work the same way: `python -m buddy.ingest run evs-c3 1`, then
+`submit maths-c1 all`, and so on.
 
 Kannada: put chapter PDFs at `data/raw/kannada/ch01.pdf`, `ch02.pdf`, … Photos can be
 combined into a PDF first. Then run the same commands. Hindi and Kannada are read from page
@@ -124,9 +143,37 @@ script prints. It's safe to re-run; `data/` and `.env` are kept.
 ## Parent view
 
 Log in with the parent password to reach `/parent`. It shows every question with its
-path (`local`, `claude_haiku`, `claude_sonnet`), the reason, the retrieval score, the
+path (`local`, `claude_haiku`, `claude_sonnet`, `verified`), 👍/👎, the reason, the retrieval score, the
 answer, the citation, the latency and the Claude cost, plus totals per path. When the
 local model was overruled, hover over the answer to see what it had said.
+
+## Fixing answers that didn't help
+
+1. **👍 / 👎 on every answer.** A 👎 flags the question. Until it's fixed, similar
+   questions skip the local model and go to Claude.
+2. **Nightly review (auto-applied).** Every night at `REVIEW_TIME` (02:30 India time by
+   default), the server sends the weak answers to Claude Sonnet 5 through the Batch API
+   (half price). Weak answers are:
+   - ones she marked 👎
+   - ones where the local model was overruled
+   - ones with a low retrieval score
+   - "not in your book" replies
+
+   For each one, Claude sees the question, Buddy's answer and a wider slice of the book,
+   and returns one of three verdicts: **fixed**, **correct** or **not_in_book**. A fix is
+   accepted only if its citation matches a passage Claude was actually shown.
+3. **What an accepted fix does.** It becomes a *verified answer*. The next similar question
+   gets it straight away, usually free. Each run stops at `REVIEW_BUDGET_USD` (default $0.50).
+4. **Parent view → ✅ Fixes** lists every fix, what Buddy said before, and the reviewer's
+   note. **Undo** removes a fix immediately, and the review won't redo that question.
+   **Run review now** runs a review straight away with the normal API (full price, about a
+   minute).
+5. **Parent view → 👎 Needs a look** lets you type the right answer yourself. You can pick a
+   book page, leave it as "Note from your parent", or tick "not in her books".
+
+The review runs inside the server, so there's nothing extra to schedule. By hand:
+`python -m buddy.review list` shows what's pending, and `python -m buddy.review run
+[--direct]` runs it.
 
 ## Development
 
@@ -146,6 +193,8 @@ result, a fake Ollama and a fake Claude stream.
   `TOP_K`, or raise `LOW_SCORE_THRESHOLD` so more questions go to Haiku.
 - `LOW_SCORE_THRESHOLD=0.45` is a starting guess for bge-m3 cosine scores. Tune it once
   real chapters are in: the parent view shows each question's score.
-- The server keeps the vector index in memory, so restart it after ingesting.
-- Chapter counts and NCERT codes come from ncert.nic.in's Class 4 listing (2025–26 books).
-  If NCERT renumbers them, edit `buddy/books.py`.
+- `VERIFIED_THRESHOLD=0.80` and `VERIFIED_DIRECT=0.92` decide how close a question must be
+  to a fixed one. They're starting guesses for bge-m3. If a fix shows up for a different
+  question, raise `VERIFIED_DIRECT`.
+- NCERT codes come from ncert.nic.in (2025–26 books). If NCERT renumbers them, edit
+  `buddy/books.py`.

@@ -2,6 +2,7 @@
 import json
 import random
 
+from buddy.books import BOOKS
 from buddy.config import ESCALATION_MODEL, cost_usd
 from buddy.llm.claude import async_client
 from buddy.logs import log_question
@@ -36,8 +37,9 @@ def _parse_qa(text: str) -> tuple[str, str]:
     return q.split("): ", 1)[-1], a
 
 
-async def make_quiz(subject: str, chapter: int, n: int = 5) -> list[dict]:
-    where = {"$and": [{"subject": subject}, {"chapter": chapter}, {"kind": "qa"}]}
+async def make_quiz(book: str, chapter: int, n: int = 5) -> list[dict]:
+    subject = BOOKS[book].subject
+    where = {"$and": [{"book": book}, {"chapter": chapter}, {"kind": "qa"}]}
     bank = store.get_by(where, limit=200)
     if not bank:
         return []
@@ -73,7 +75,7 @@ async def make_quiz(subject: str, chapter: int, n: int = 5) -> list[dict]:
         output_config={"format": {"type": "json_schema", "schema": QUIZ_SCHEMA}},
     )
     data = json.loads(next(b.text for b in msg.content if b.type == "text"))
-    log_question(question=f"[quiz] {subject} chapter {chapter}", subject=subject,
+    log_question(question=f"[quiz] {book} chapter {chapter}", subject=subject,
                  route="claude_haiku", reason="quiz_school_pattern", model=ESCALATION_MODEL,
                  input_tokens=msg.usage.input_tokens, output_tokens=msg.usage.output_tokens,
                  cost_usd=cost_usd(ESCALATION_MODEL, msg.usage.input_tokens,

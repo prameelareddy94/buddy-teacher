@@ -11,6 +11,9 @@
   python -m buddy.ingest add-zip evs ~/Downloads/deev1dd.zip     # whole book at once
   python -m buddy.ingest index evs 1-10
   python -m buddy.ingest upload file.pdf --subject maths --chapter 3 --kind worksheet
+
+Books are named by key: the Class 4 book is the bare subject (evs, english, maths,
+hindi, kannada); older classes add the class: evs-c3, english-c1, maths-c2 ...
 """
 import argparse
 import sys
@@ -32,9 +35,12 @@ def client():
         sys.exit(str(e))
 
 
-def parse_chapters(subject: str, spec: str) -> list[int]:
+def parse_chapters(book_key: str, spec: str) -> list[int]:
     if spec == "all":
-        return available_chapters(get_book(subject))
+        chapters = available_chapters(get_book(book_key), fetch=True)
+        if not chapters:
+            sys.exit(f"No chapters found for {book_key}. Add PDFs with add-pdf / add-zip.")
+        return chapters
     out: list[int] = []
     for part in spec.split(","):
         if "-" in part:
@@ -55,27 +61,27 @@ def print_reports(reports: list[dict]) -> None:
 
 
 def cmd_download(a):
-    for ch in parse_chapters(a.subject, a.chapters):
-        print(f"{a.subject} ch{ch:02d} -> {download_chapter(get_book(a.subject), ch, a.force)}")
+    for ch in parse_chapters(a.book, a.chapters):
+        print(f"{a.book} ch{ch:02d} -> {download_chapter(get_book(a.book), ch, a.force)}")
 
 
 def cmd_add_pdf(a):
-    print(f"{a.subject} ch{int(a.chapter):02d} -> "
-          f"{add_pdf(get_book(a.subject), int(a.chapter), Path(a.file))}")
+    print(f"{a.book} ch{int(a.chapter):02d} -> "
+          f"{add_pdf(get_book(a.book), int(a.chapter), Path(a.file))}")
 
 
 def cmd_add_zip(a):
-    for p in add_zip(get_book(a.subject), Path(a.file)):
-        print(f"{a.subject} -> {p}")
+    for p in add_zip(get_book(a.book), Path(a.file)):
+        print(f"{a.book} -> {p}")
 
 
 def cmd_estimate(a):
     c = client()
-    for ch in parse_chapters(a.subject, a.chapters):
-        download_chapter(get_book(a.subject), ch)
-        n = batch.count_input_tokens(c, batch.chapter_params(get_book(a.subject), ch))
+    for ch in parse_chapters(a.book, a.chapters):
+        download_chapter(get_book(a.book), ch)
+        n = batch.count_input_tokens(c, batch.chapter_params(get_book(a.book), ch))
         guess_out = 12_000  # rough; replaced by the measured number after the first run
-        print(f"{a.subject} ch{ch:02d}: {n:,} input tokens -> "
+        print(f"{a.book} ch{ch:02d}: {n:,} input tokens -> "
               f"~${cost_usd(INGEST_MODEL, n, guess_out, batch=True):.3f} "
               f"(assuming ~{guess_out:,} output tokens incl. thinking, batch price)")
 
@@ -88,7 +94,7 @@ def gate(items: list[tuple[str, int]], force: bool) -> None:
 
 
 def cmd_submit(a):
-    items = [(a.subject, ch) for ch in parse_chapters(a.subject, a.chapters)]
+    items = [(a.book, ch) for ch in parse_chapters(a.book, a.chapters)]
     gate(items, a.force)
     for s, ch in items:
         download_chapter(get_book(s), ch)
@@ -105,18 +111,18 @@ def cmd_collect(a):
     print_reports(reports)
     for r in reports:
         if r["status"] == "ok" and not a.no_index:
-            n = index_chapter(r["subject"], r["chapter"])
+            n = index_chapter(r["book"], r["chapter"])
             print(f"  indexed {r['id']}: {n} chunks")
 
 
 def cmd_run(a):
-    book = get_book(a.subject)
+    book = get_book(a.book)
     ch = int(a.chapter)
     c = client()  # fail on a missing key before doing any work
     print(f"1/4 download {book.label} ch{ch:02d}")
     download_chapter(book, ch)
     print(f"2/4 submit batch ({INGEST_MODEL}, 50% batch price)")
-    bid = batch.submit(c, [(a.subject, ch)])
+    bid = batch.submit(c, [(a.book, ch)])
     print(f"    batch id {bid} (safe to Ctrl-C; resume with `collect {bid} --wait`)")
     print("3/4 wait for results")
     batch.wait(c, bid)
@@ -125,13 +131,13 @@ def cmd_run(a):
     ok = [r for r in reports if r["status"] == "ok"]
     if not ok:
         sys.exit("Chapter failed; nothing indexed.")
-    print(f"4/4 index into ChromaDB: {index_chapter(a.subject, ch)} chunks")
+    print(f"4/4 index into ChromaDB: {index_chapter(a.book, ch)} chunks")
     cmd_costs(a)
 
 
 def cmd_index(a):
-    for ch in parse_chapters(a.subject, a.chapters):
-        print(f"{a.subject} ch{ch:02d}: {index_chapter(a.subject, ch)} chunks")
+    for ch in parse_chapters(a.book, a.chapters):
+        print(f"{a.book} ch{ch:02d}: {index_chapter(a.book, ch)} chunks")
 
 
 def cmd_costs(_a):
@@ -141,17 +147,18 @@ def cmd_costs(_a):
         return
     total = sum(r["cost_usd"] for r in hist)
     avg = total / len(hist)
-    done = {(r["subject"], r["chapter"]) for r in hist}
+    done = {(r.get("book", r.get("subject")), r["chapter"]) for r in hist}
     remaining = sum(
         1 for b in BOOKS.values() if b.chapters
-        for ch in range(1, b.chapters + 1) if (b.subject, ch) not in done
+        for ch in range(1, b.chapters + 1) if (b.key, ch) not in done
     )
+    unknown = [b.key for b in BOOKS.values() if not b.chapters]
     print(f"Measured: {len(hist)} chapter(s), ${total:.4f} total, ${avg:.4f} per chapter "
           f"(avg in={sum(r['input_tokens'] for r in hist)//len(hist):,} "
           f"out={sum(r['output_tokens'] for r in hist)//len(hist):,} tokens)")
     print(f"Projection: {remaining} NCERT chapters left -> ~${avg * remaining:.2f} "
-          "(Hindi pages are image-only, so expect those to differ a little; "
-          "Kannada not counted until its book is chosen)")
+          "(Hindi pages are image-only, so expect those to differ a little)")
+    print(f"Not counted (chapter count unknown until downloaded): {', '.join(unknown)}")
 
 
 def cmd_upload(a):
@@ -167,7 +174,7 @@ def main(argv=None):
 
     def with_sc(name, fn, chapter_arg="chapters"):
         sp = sub.add_parser(name)
-        sp.add_argument("subject", choices=list(BOOKS))
+        sp.add_argument("book", choices=list(BOOKS), help="book key, e.g. evs or evs-c3")
         sp.add_argument(chapter_arg)
         sp.set_defaults(fn=fn)
         return sp
@@ -176,7 +183,7 @@ def main(argv=None):
     sp = with_sc("add-pdf", cmd_add_pdf, "chapter")
     sp.add_argument("file")
     sp = sub.add_parser("add-zip")
-    sp.add_argument("subject", choices=list(BOOKS))
+    sp.add_argument("book", choices=list(BOOKS), help="book key, e.g. evs or evs-c3")
     sp.add_argument("file")
     sp.set_defaults(fn=cmd_add_zip)
     with_sc("estimate", cmd_estimate)

@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from buddy.books import BOOKS
+from buddy.books import BOOKS, CURRENT_GRADE
 from buddy.config import INGEST_MODEL, cost_usd, get_settings
 from buddy.ingest.index import split_text
 from buddy.ingest.pdf import Page, load_upload
@@ -57,7 +57,7 @@ def index_upload(upload_id: str, data: dict, subject: str, chapter: int, kind: s
         subject = data["subject_guess"] if data["subject_guess"] in BOOKS else "general"
     chapter = chapter or data["chapter_guess"] or 0
     label = BOOKS[subject].label if subject in BOOKS else "School"
-    base = {"subject": subject, "chapter": chapter, "chapter_title": data["title"],
+    base = {"subject": subject, "grade": CURRENT_GRADE, "book": subject, "chapter": chapter, "chapter_title": data["title"],
             "topic": data["title"], "source": "school", "upload_id": upload_id,
             "upload_kind": kind}
 

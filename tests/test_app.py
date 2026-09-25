@@ -53,7 +53,7 @@ def test_ask_streams_and_logs(monkeypatch):
     assert log["rows"][0]["route"] == "local"
     assert log["summary"]["total_questions"] == 1
     assert c.get("/api/chapters", params={"subject": "evs"}).json() == \
-        [{"chapter": 1, "title": "Nurturing Nature"}]
+        [{"book": "evs", "chapter": 1, "grade": 4, "title": "Nurturing Nature", "label": "EVS"}]
 
 
 def test_upload_worksheet(monkeypatch, tmp_path):
@@ -100,7 +100,7 @@ def test_quiz_from_book_bank():
     seed()
     c = TestClient(app)
     login(c, "kid")
-    qs = c.post("/api/quiz", data={"subject": "evs", "chapter": "1"}).json()["questions"]
+    qs = c.post("/api/quiz", data={"book": "evs", "chapter": "1"}).json()["questions"]
     assert len(qs) == 2
     assert {q["question"] for q in qs} == {"What do plants need to make food?",
                                            "Trees give homes to birds. True or false?"}

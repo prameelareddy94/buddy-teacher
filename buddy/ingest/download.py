@@ -14,12 +14,12 @@ NCERT_PDF = "https://ncert.nic.in/textbook/pdf/{code}{chapter:02d}.pdf"
 NCERT_ZIP = "https://ncert.nic.in/textbook/pdf/{code}dd.zip"
 
 
-def chapter_pdf_path(subject: str, chapter: int) -> Path:
-    return get_settings().raw_dir / subject / f"ch{chapter:02d}.pdf"
+def chapter_pdf_path(book_key: str, chapter: int) -> Path:
+    return get_settings().raw_dir / book_key / f"ch{chapter:02d}.pdf"
 
 
 def _manual_help(book: Book, chapter: int, why: str) -> str:
-    dest = chapter_pdf_path(book.subject, chapter)
+    dest = chapter_pdf_path(book.key, chapter)
     lines = [f"Could not download {book.label} chapter {chapter}: {why}", ""]
     if book.ncert_code:
         lines += [
@@ -27,23 +27,25 @@ def _manual_help(book: Book, chapter: int, why: str) -> str:
             "networks. Download the PDF in a browser (or over a VPN / India connection) and "
             "import it:",
             f"  chapter: {NCERT_PDF.format(code=book.ncert_code, chapter=chapter)}",
-            f"    python -m buddy.ingest add-pdf {book.subject} {chapter} ~/Downloads/"
+            f"    python -m buddy.ingest add-pdf {book.key} {chapter} ~/Downloads/"
             f"{book.ncert_code}{chapter:02d}.pdf",
             f"  whole book: {NCERT_ZIP.format(code=book.ncert_code)}",
-            f"    python -m buddy.ingest add-zip {book.subject} ~/Downloads/"
+            f"    python -m buddy.ingest add-zip {book.key} ~/Downloads/"
             f"{book.ncert_code}dd.zip",
         ]
     lines.append(f"(or just copy the file to {dest})")
     return "\n".join(lines)
 
 
-def download_chapter(book: Book, chapter: int, force: bool = False, attempts: int = 3) -> Path:
-    dest = chapter_pdf_path(book.subject, chapter)
+def download_chapter(book: Book, chapter: int, force: bool = False, attempts: int = 3,
+                     missing_ok: bool = False) -> Path | None:
+    """Download one chapter. With missing_ok, a 404 returns None (used to find the last chapter)."""
+    dest = chapter_pdf_path(book.key, chapter)
     if dest.exists() and not force:
         return dest
     if not book.ncert_code:
         raise SystemExit(f"{book.label} has no download source. Put the chapter PDF at {dest} "
-                         f"or run: python -m buddy.ingest add-pdf {book.subject} {chapter} FILE")
+                         f"or run: python -m buddy.ingest add-pdf {book.key} {chapter} FILE")
     url = NCERT_PDF.format(code=book.ncert_code, chapter=chapter)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(".part")
@@ -56,6 +58,8 @@ def download_chapter(book: Book, chapter: int, force: bool = False, attempts: in
             with httpx.stream("GET", url, headers=headers, timeout=timeout,
                               follow_redirects=True) as r:
                 if r.status_code == 404:
+                    if missing_ok:
+                        return None
                     raise SystemExit(_manual_help(book, chapter, f"{url} returned 404 "
                                                   "(NCERT may have renamed the book)"))
                 r.raise_for_status()
@@ -91,7 +95,7 @@ def _accept(src: Path, dest: Path, what: str) -> Path:
 
 def add_pdf(book: Book, chapter: int, src: Path) -> Path:
     """Import a chapter PDF downloaded by hand."""
-    return _accept(src.expanduser(), chapter_pdf_path(book.subject, chapter), str(src))
+    return _accept(src.expanduser(), chapter_pdf_path(book.key, chapter), str(src))
 
 
 def add_zip(book: Book, src: Path) -> list[Path]:
@@ -103,7 +107,7 @@ def add_zip(book: Book, src: Path) -> list[Path]:
             m = pat.search(name)
             if not m or int(m.group(1)) == 0:
                 continue
-            dest = chapter_pdf_path(book.subject, int(m.group(1)))
+            dest = chapter_pdf_path(book.key, int(m.group(1)))
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(z.read(name))
             out.append(dest)
@@ -112,8 +116,22 @@ def add_zip(book: Book, src: Path) -> list[Path]:
     return sorted(out)
 
 
-def available_chapters(book: Book) -> list[int]:
+def local_chapters(book: Book) -> list[int]:
+    folder = get_settings().raw_dir / book.key
+    return sorted(int(p.stem[2:]) for p in folder.glob("ch[0-9][0-9].pdf"))
+
+
+def available_chapters(book: Book, fetch: bool = False, limit: int = 30) -> list[int]:
+    """Chapters of a book. For books with an unknown count, use the PDFs already
+    present; with fetch=True, download from NCERT until a chapter is missing."""
     if book.chapters:
         return list(range(1, book.chapters + 1))
-    folder = get_settings().raw_dir / book.subject
-    return sorted(int(p.stem[2:]) for p in folder.glob("ch[0-9][0-9].pdf"))
+    have = local_chapters(book)
+    if have or not fetch or not book.ncert_code:
+        return have
+    found = []
+    for ch in range(1, limit + 1):
+        if download_chapter(book, ch, missing_ok=True) is None:
+            break
+        found.append(ch)
+    return found

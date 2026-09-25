@@ -5,7 +5,7 @@ from buddy.books import Book
 from buddy.ingest.pdf import Page
 
 CHAPTER_SYSTEM = """You prepare textbook chapters for a study helper used by a 9-year-old \
-in Class 4 (CBSE, Karnataka, India). You receive every page of one chapter as an \
+in Class 4 (CBSE, Karnataka, India). Books from Classes 1-3 are included for basics. You receive every page of one chapter as an \
 image, sometimes with the PDF text layer. Your output is stored and later used to \
 answer the child's questions, so it must be faithful to the book: never add facts \
 that are not on the pages.
@@ -137,7 +137,7 @@ def image_block(jpeg: bytes) -> dict:
 def chapter_content(book: Book, chapter: int, pages: list[Page]) -> list[dict]:
     content: list[dict] = [{
         "type": "text",
-        "text": f"Book: {book.label} - \"{book.title}\" (Class 4, language: {book.language}). "
+        "text": f"Book: {book.label} - \"{book.title}\" (Class {book.grade}, language: {book.language}). "
                 f"Chapter {chapter}. {len(pages)} pages follow.",
     }]
     for p in pages:

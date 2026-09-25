@@ -21,12 +21,12 @@ from buddy.ingest.prompts import CHAPTER_SCHEMA, CHAPTER_SYSTEM, chapter_content
 MAX_TOKENS = 48000  # thinking + a long JSON; batch requests have no HTTP timeout issue
 
 
-def processed_path(subject: str, chapter: int) -> Path:
-    return get_settings().processed_dir / subject / f"ch{chapter:02d}.json"
+def processed_path(book_key: str, chapter: int) -> Path:
+    return get_settings().processed_dir / book_key / f"ch{chapter:02d}.json"
 
 
 def chapter_params(book: Book, chapter: int) -> dict:
-    pages = load_pages(chapter_pdf_path(book.subject, chapter),
+    pages = load_pages(chapter_pdf_path(book.key, chapter),
                        use_text=book.text_mode == "text")
     return {
         "model": INGEST_MODEL,
@@ -40,13 +40,13 @@ def chapter_params(book: Book, chapter: int) -> dict:
     }
 
 
-def custom_id(subject: str, chapter: int) -> str:
-    return f"{subject}-ch{chapter:02d}"
+def custom_id(book_key: str, chapter: int) -> str:
+    return f"{book_key}-ch{chapter:02d}"
 
 
 def parse_custom_id(cid: str) -> tuple[str, int]:
-    subject, ch = cid.rsplit("-ch", 1)
-    return subject, int(ch)
+    book_key, ch = cid.rsplit("-ch", 1)
+    return book_key, int(ch)
 
 
 def count_input_tokens(client: anthropic.Anthropic, params: dict) -> int:
@@ -57,9 +57,9 @@ def count_input_tokens(client: anthropic.Anthropic, params: dict) -> int:
 
 def submit(client: anthropic.Anthropic, items: list[tuple[str, int]]) -> str:
     requests = []
-    for subject, chapter in items:
-        params = chapter_params(get_book(subject), chapter)
-        requests.append(Request(custom_id=custom_id(subject, chapter),
+    for book_key, chapter in items:
+        params = chapter_params(get_book(book_key), chapter)
+        requests.append(Request(custom_id=custom_id(book_key, chapter),
                                 params=MessageCreateParamsNonStreaming(**params)))
     batch = client.messages.batches.create(requests=requests)
     s = get_settings()
@@ -89,7 +89,7 @@ def collect(client: anthropic.Anthropic, batch_id: str) -> list[dict]:
     s = get_settings()
     reports = []
     for res in client.messages.batches.results(batch_id):
-        subject, chapter = parse_custom_id(res.custom_id)
+        book_key, chapter = parse_custom_id(res.custom_id)
         if res.result.type != "succeeded":
             detail = getattr(res.result, "error", None)
             reports.append({"id": res.custom_id, "status": res.result.type, "detail": str(detail)})
@@ -104,7 +104,7 @@ def collect(client: anthropic.Anthropic, batch_id: str) -> list[dict]:
         report = {
             "id": res.custom_id,
             "status": "ok",
-            "subject": subject,
+            "book": book_key,  # e.g. "evs" (Class 4) or "evs-c3"
             "chapter": chapter,
             "model": msg.model,
             "batch_id": batch_id,
@@ -116,7 +116,7 @@ def collect(client: anthropic.Anthropic, batch_id: str) -> list[dict]:
             "qa_pairs": sum(len(t["qa"]) for t in data["topics"]),
             "at": datetime.now(timezone.utc).isoformat(),
         }
-        out = processed_path(subject, chapter)
+        out = processed_path(book_key, chapter)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps({"meta": report, "result": data}, ensure_ascii=False, indent=2))
         with open(s.cost_log, "a") as f:

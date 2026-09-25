@@ -69,11 +69,24 @@ function buddyBubble(reveal = false) {
       source.textContent = p.source ? "📖 " + p.source : "";
       scroll();
     },
-    addExplainMore(id) {
+    addActions(id) {
       if (!id) return;
       const b = el("button", "ghost", "🤔 Explain more"); b.type = "button";
       b.onclick = () => { b.disabled = true; ask({ explainMoreOf: id }); };
-      actions.appendChild(b);
+      const up = el("button", "ghost thumb", "👍"); up.type = "button"; up.title = "This helped";
+      const down = el("button", "ghost thumb", "👎"); down.type = "button"; down.title = "This didn't help";
+      const vote = async (v) => {
+        up.disabled = down.disabled = true;
+        (v === "up" ? up : down).classList.add("on");
+        const fd = new FormData(); fd.append("id", id); fd.append("vote", v);
+        await fetch("/api/feedback", { method: "POST", body: fd });
+        if (v === "down") {
+          chat.appendChild(el("div", "msg buddy", "Thanks for telling me! 🦉 A grown-up teacher will check this answer. You can also tap 🤔 Explain more."));
+          scroll();
+        }
+      };
+      up.onclick = () => vote("up"); down.onclick = () => vote("down");
+      actions.append(b, up, down);
     },
   };
 }
@@ -113,7 +126,7 @@ async function ask({ text = "", file = null, explainMoreOf = null } = {}) {
         const ev = JSON.parse(line.slice(6));
         if (ev.type === "meta") raw = "";           // (re)started, e.g. after a local fallback
         else if (ev.type === "delta") { raw += ev.text; bubble.update(parseSections(raw), true); }
-        else if (ev.type === "done") { bubble.update(ev, false); bubble.addExplainMore(ev.id); }
+        else if (ev.type === "done") { bubble.update(ev, false); bubble.addActions(ev.id); }
       }
     }
   } catch (e) {
@@ -147,15 +160,16 @@ document.getElementById("quizBtn").onclick = async () => {
   const m = el("div", "msg buddy", "Which chapter? ");
   const acts = el("div", "actions");
   for (const c of chs) {
-    const b = el("button", "ghost", `${c.chapter}. ${c.title}`); b.type = "button";
-    b.onclick = () => { acts.remove(); runQuiz(c.chapter); };
+    const prefix = c.grade === 4 ? "" : `Class ${c.grade} · `;
+    const b = el("button", "ghost", `${prefix}${c.chapter}. ${c.title}`); b.type = "button";
+    b.onclick = () => { acts.remove(); runQuiz(c.book, c.chapter); };
     acts.appendChild(b);
   }
   m.appendChild(acts); chat.appendChild(m); scroll();
 };
 
-async function runQuiz(chapter) {
-  const fd = new FormData(); fd.append("subject", subject); fd.append("chapter", chapter);
+async function runQuiz(book, chapter) {
+  const fd = new FormData(); fd.append("book", book); fd.append("chapter", chapter);
   const wait = el("div", "msg buddy typing", "Making your quiz…"); chat.appendChild(wait); scroll();
   const { questions } = await (await fetch("/api/quiz", { method: "POST", body: fd })).json();
   wait.remove();

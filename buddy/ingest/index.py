@@ -27,9 +27,9 @@ def split_text(text: str, size: int = CHUNK_CHARS) -> list[str]:
     return chunks
 
 
-def index_chapter(subject: str, chapter: int) -> int:
-    book = get_book(subject)
-    data = json.loads(processed_path(subject, chapter).read_text())["result"]
+def index_chapter(book_key: str, chapter: int) -> int:
+    book = get_book(book_key)
+    data = json.loads(processed_path(book_key, chapter).read_text())["result"]
     printed = {p["pdf_page"]: p["printed_page"] for p in data["page_numbers"]}
 
     def pg(pdf_pages: list[int]) -> list[int]:
@@ -40,13 +40,14 @@ def index_chapter(subject: str, chapter: int) -> int:
 
     def add(kind: str, n: int, text: str, pages: list[int], topic: str, **extra) -> None:
         head = f"{book.label} Chapter {chapter} \"{title}\" - {topic}"
-        ids.append(f"{subject}-ch{chapter:02d}-{kind}-{n}")
+        ids.append(f"{book.key}-ch{chapter:02d}-{kind}-{n}")
         texts.append(f"{head}\n{text}")
         meta = {
-            "subject": subject, "chapter": chapter, "chapter_title": title,
+            "subject": book.subject, "grade": book.grade, "book": book.key,
+            "chapter": chapter, "chapter_title": title,
             "topic": topic, "kind": kind, "source": "ncert",
             "page": pages[0], "pages": ",".join(str(p) for p in pages),
-            "cite": citation(subject, chapter, pages[0]),
+            "cite": citation(book.key, chapter, pages[0]),
         }
         meta.update(extra)
         metas.append(meta)
@@ -70,7 +71,7 @@ def index_chapter(subject: str, chapter: int) -> int:
         text = "\n".join(f"{v['word']}: {v['meaning']}" for v in group)
         add("vocab", n, "Word meanings:\n" + text, pg([group[0]["pdf_page"]]), "Vocabulary"); n += 1
 
-    store.delete_where({"$and": [{"subject": subject}, {"chapter": chapter},
+    store.delete_where({"$and": [{"book": book.key}, {"chapter": chapter},
                                  {"source": "ncert"}]})
     store.add_chunks(ids, texts, metas)
     return len(ids)

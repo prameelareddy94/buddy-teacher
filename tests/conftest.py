@@ -15,11 +15,14 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("PARENT_PASSWORD", "parent")
     monkeypatch.setenv("SESSION_SECRET", "x" * 32)
     monkeypatch.setenv("LOW_SCORE_THRESHOLD", "0.2")
-    for f in (config.get_settings, embed.get_embedder, store.get_collection,
+    monkeypatch.setenv("REVIEW_ENABLED", "false")
+    store.reset_cache()
+    for f in (config.get_settings, embed.get_embedder,
               claude.sync_client, claude.async_client):
         f.cache_clear()
     yield
-    for f in (config.get_settings, store.get_collection):
+    store.reset_cache()
+    for f in (config.get_settings,):
         f.cache_clear()
 
 

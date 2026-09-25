@@ -34,6 +34,17 @@ class Settings(BaseSettings):
     data_dir: Path = Path("./data")
     low_score_threshold: float = 0.45
     top_k: int = 6
+    # A fixed (verified) answer this similar to a new question is shown to the model
+    # first; at verified_direct it is answered straight from the fix, no model call.
+    verified_threshold: float = 0.80
+    verified_direct: float = 0.92
+
+    # Nightly review of weak answers by Claude (runs inside the server)
+    review_enabled: bool = True
+    review_time: str = "02:30"          # HH:MM in review_tz
+    review_tz: str = "Asia/Kolkata"
+    review_budget_usd: float = 0.50     # hard cap per run (estimated before sending)
+    review_max_items: int = 40
 
     host: str = "127.0.0.1"
     port: int = 8000

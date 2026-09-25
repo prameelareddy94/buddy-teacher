@@ -43,7 +43,11 @@ def format_passages(hits: list[Hit]) -> str:
     for i, h in enumerate(hits, 1):
         kind = h.meta.get("kind", "")
         extra = f" | hint: {h.meta['hint']}" if h.meta.get("hint") else ""
-        lines.append(f"[{i}] cite: {h.cite} | type: {kind}{extra}\n{h.text}")
+        text = h.text
+        if kind == "verified":  # checked answer to a similar earlier question
+            kind = "checked answer (trust this first)"
+            text = f"Q: {h.text}\nA: {h.meta.get('answer', '')}"
+        lines.append(f"[{i}] cite: {h.cite or 'none'} | type: {kind}{extra}\n{text}")
     return "\n\n".join(lines)
 
 

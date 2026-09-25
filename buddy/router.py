@@ -1,9 +1,12 @@
 """Decide who answers, get the answer, log the path.
 
+Before anything else: a fixed ("verified") answer that closely matches the question
+is returned directly (route "verified", no model call).
 Rules first (cheap, predictable):
   photo attached           -> Claude Sonnet 5 (vision)
   "Explain more" button    -> Claude Haiku 4.5
   Kannada question         -> Claude Haiku 4.5 (small local models are weak at Kannada)
+  like an unfixed 👎 one   -> Claude Haiku 4.5
   multi-topic why/how      -> Claude Haiku 4.5
   low retrieval score      -> Claude Haiku 4.5
 Otherwise the local model answers in ONE call returning JSON; if it is not confident
@@ -14,11 +17,11 @@ import base64
 import re
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import anthropic
 
-from buddy.books import BOOKS, citation
+from buddy.books import SUBJECTS, citation
 from buddy.config import ESCALATION_MODEL, VISION_MODEL, cost_usd, get_settings
 from buddy.kid_rules import (EXPLAIN_MORE_FORMAT, NOT_IN_BOOK, RULES, TEXT_FORMAT,
                              parse_sections, user_prompt)
@@ -32,7 +35,7 @@ KANNADA = re.compile(r"[ಀ-೿]")
 WHY_HOW = re.compile(r"\b(why|how)\b|क्यों|कैसे|ಏಕೆ|ಯಾಕೆ|ಹೇಗೆ", re.IGNORECASE)
 MULTI_TOPIC_BAND = 0.05  # topics scoring within this of the best count as "equally relevant"
 
-LOCAL, HAIKU, SONNET = "local", "claude_haiku", "claude_sonnet"
+LOCAL, HAIKU, SONNET, VERIFIED = "local", "claude_haiku", "claude_sonnet", "verified"
 
 
 @dataclass
@@ -50,7 +53,15 @@ class Decision:
     reason: str
 
 
-def decide(ask: Ask, hits: list[Hit], threshold: float | None = None) -> Decision:
+@dataclass
+class Retrieval:
+    hits: list[Hit]                 # verified fixes (if close) first, then book passages
+    verified: list[Hit] = field(default_factory=list)
+    flagged: Hit | None = None      # a similar question marked 👎 and not fixed yet
+
+
+def decide(ask: Ask, hits: list[Hit], threshold: float | None = None,
+           similar_flagged: bool = False) -> Decision:
     thr = get_settings().low_score_threshold if threshold is None else threshold
     if ask.image:
         return Decision(SONNET, "photo")
@@ -58,6 +69,8 @@ def decide(ask: Ask, hits: list[Hit], threshold: float | None = None) -> Decisio
         return Decision(HAIKU, "explain_more")
     if ask.subject == "kannada" or KANNADA.search(ask.question):
         return Decision(HAIKU, "kannada")
+    if similar_flagged:
+        return Decision(HAIKU, "similar_flagged")
     book_hits = [h for h in hits if h.meta.get("kind") != "pattern"]
     top = max((h.score for h in book_hits), default=0.0)
     if top < thr:
@@ -81,7 +94,7 @@ def cite_for_pages(hits: list[Hit], pages: list[int]) -> str | None:
             if h.meta.get("kind") != "pattern" and page in _pages(h):
                 m = h.meta
                 if m.get("source") == "ncert":
-                    return citation(m["subject"], m["chapter"], page)
+                    return citation(m.get("book", m["subject"]), m["chapter"], page)
                 return h.cite
     return None
 
@@ -120,15 +133,20 @@ def finalize_source(parsed: dict, hits: list[Hit]) -> dict:
     return parsed
 
 
-async def _retrieve(query: str, subject: str | None) -> list[Hit]:
+async def _retrieve(query: str, subject: str | None) -> Retrieval:
+    s = get_settings()
     hits = await asyncio.to_thread(store.search, query, subject)
-    subj = subject or next((h.meta.get("subject") for h in hits), None)
-    if subj in BOOKS:
+    verified = [h for h in await asyncio.to_thread(store.search, query, subject, 2, ["verified"])
+                if h.score >= s.verified_threshold]
+    flagged = [h for h in await asyncio.to_thread(store.search, query, subject, 1, ["flagged"])
+               if h.score >= s.verified_threshold]
+    subj = subject or next((h.meta.get("subject") for h in verified + hits), None)
+    if subj in SUBJECTS:
         patterns = await asyncio.to_thread(
             store.get_by, {"$and": [{"subject": subj}, {"kind": "pattern"}]}, 2)
         seen = {h.id for h in hits}
         hits += [p for p in patterns if p.id not in seen]
-    return hits
+    return Retrieval(verified + hits, verified, None if verified else (flagged or [None])[0])
 
 
 async def _transcribe(ask: Ask) -> tuple[str, object]:
@@ -171,9 +189,27 @@ async def answer(ask: Ask) -> AsyncIterator[dict]:
         cost += cost_usd(ESCALATION_MODEL, u.input_tokens, u.output_tokens)
         query = f"{question}\n{seen}".strip()
 
-    hits = await _retrieve(query, ask.subject)
-    decision = decide(ask, hits)
+    r = await _retrieve(query, ask.subject)
+    hits = r.hits
     top = max((h.score for h in hits if h.meta.get("kind") != "pattern"), default=0.0)
+
+    best = r.verified[0] if r.verified else None
+    if (best and best.score >= get_settings().verified_direct and not ask.image
+            and not ask.explain_more_of):
+        m = best.meta
+        parsed = {"hint": m.get("hint", ""), "answer": m.get("answer", ""), "source": best.cite}
+        yield {"type": "meta", "route": VERIFIED, "reason": "verified_match"}
+        text = f"HINT: {parsed['hint']}\nANSWER: {parsed['answer']}\nSOURCE: {best.cite}"
+        yield {"type": "delta", "text": text}
+        qid = log_question(
+            question=question, subject=ask.subject, route=VERIFIED, reason="verified_match",
+            model=f"fix #{m.get('fix_id')}", top_score=best.score, had_image=0,
+            latency_ms=int((time.monotonic() - t0) * 1000), input_tokens=0,
+            output_tokens=0, cost_usd=0.0, **parsed)
+        yield {"type": "done", "id": qid, "route": VERIFIED, "reason": "verified_match", **parsed}
+        return
+
+    decision = decide(ask, hits, similar_flagged=r.flagged is not None)
     yield {"type": "meta", "route": decision.route, "reason": decision.reason}
 
     local_attempt = None

@@ -10,66 +10,174 @@
     <form method="post" action="/logout"><button class="ghost">Log out</button></form>
   </header>
 
-  <h2>Upload school material</h2>
-  <form id="up">
-    <input type="file" name="files" multiple accept=".pdf,image/*" required>
-    <select name="subject">
-      <option value="unknown">Subject: let Buddy guess</option>
-      <option value="evs">EVS</option><option value="english">English</option>
-      <option value="maths">Maths</option><option value="hindi">Hindi</option>
-      <option value="kannada">Kannada</option>
-    </select>
-    <label>Chapter <input type="number" name="chapter" value="0" min="0" style="width:70px"></label>
-    <select name="kind">
-      <option value="worksheet">Worksheet</option>
-      <option value="notes">Class notes</option>
-      <option value="test paper">Test paper</option>
-    </select>
-    <button type="submit">Upload</button>
-    <span id="upmsg"></span>
-  </form>
+  <section>
+    <h2>Upload school material</h2>
+    <form id="up">
+      <input type="file" name="files" multiple accept=".pdf,image/*" required>
+      <select name="subject">
+        <option value="unknown">Subject: let Buddy guess</option>
+        <option value="evs">EVS</option><option value="english">English</option>
+        <option value="maths">Maths</option><option value="hindi">Hindi</option>
+        <option value="kannada">Kannada</option>
+      </select>
+      <label>Chapter <input type="number" name="chapter" value="0" min="0" style="width:70px"></label>
+      <select name="kind">
+        <option value="worksheet">Worksheet</option>
+        <option value="notes">Class notes</option>
+        <option value="test paper">Test paper</option>
+      </select>
+      <button type="submit">Upload</button>
+      <span id="upmsg"></span>
+    </form>
+  </section>
 
-  <h2>Questions and which path answered them</h2>
-  <div class="cards" id="cards"></div>
-  <table>
-    <thead><tr><th>When</th><th>Question</th><th>Path</th><th>Why</th><th>Score</th>
-      <th>Answer</th><th>Source</th><th>ms</th><th>$</th></tr></thead>
-    <tbody id="rows"></tbody>
-  </table>
+  <section>
+    <h2>👎 Needs a look</h2>
+    <p class="muted" id="flagHelp">Answers she marked as not helpful. The nightly review fixes these
+      automatically; you can also write the right answer yourself.</p>
+    <table>
+      <thead><tr><th>When</th><th>Question</th><th>Buddy said</th><th>Your fix</th></tr></thead>
+      <tbody id="flagged"></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>✅ Fixes</h2>
+    <div class="cards">
+      <div class="card" id="schedule"></div>
+      <button class="secondary" id="runNow" type="button">Run review now</button>
+      <span id="runmsg"></span>
+    </div>
+    <div class="cards" id="runs"></div>
+    <table>
+      <thead><tr><th>When</th><th>By</th><th>Verdict</th><th>Question</th><th>New answer</th>
+        <th>Source</th><th>Was</th><th></th></tr></thead>
+      <tbody id="fixes"></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Questions and which path answered them</h2>
+    <div class="cards" id="cards"></div>
+    <table>
+      <thead><tr><th>When</th><th>Question</th><th>Path</th><th>Why</th><th>Score</th>
+        <th>Answer</th><th>Source</th><th>👍/👎</th><th>ms</th><th>$</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
 </div>
 <script>
+let BOOKS = [];
 function td(text, cls) { const d = document.createElement("td"); d.textContent = text ?? ""; if (cls) d.className = cls; return d; }
-async function load() {
+function when(ts) { return new Date(ts * 1000).toLocaleString(); }
+function mk(tag, props = {}, text) { const e = document.createElement(tag); Object.assign(e, props); if (text !== undefined) e.textContent = text; return e; }
+
+function correctionForm(q) {
+  const f = mk("form", { className: "correct" });
+  const ans = mk("textarea", { name: "answer", rows: 3, placeholder: "The right answer, in simple words" });
+  const hint = mk("input", { name: "hint", placeholder: "Hint (optional)" });
+  const book = mk("select", { name: "book" });
+  book.appendChild(mk("option", { value: "" }, "No book page (parent's note)"));
+  for (const b of BOOKS) book.appendChild(mk("option", { value: b.key }, `${b.label} – ${b.title}`));
+  const ch = mk("input", { name: "chapter", type: "number", min: 0, placeholder: "Chapter", style: "width:90px" });
+  const pg = mk("input", { name: "page", type: "number", min: 0, placeholder: "Page", style: "width:90px" });
+  const nib = mk("label"); const cb = mk("input", { type: "checkbox", name: "not_in_book", value: "true" });
+  nib.append(cb, " Not in her books");
+  const row = mk("div"); row.append(book, " ", ch, " ", pg, " ", nib);
+  const save = mk("button", { type: "submit" }, "Save fix");
+  const msg = mk("span");
+  f.append(ans, hint, row, save, msg);
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(f); fd.append("question_id", q.id);
+    if (!cb.checked) fd.delete("not_in_book");
+    const r = await fetch("/api/correct", { method: "POST", body: fd });
+    const j = await r.json();
+    msg.textContent = r.ok ? " Saved ✔" : " " + (j.detail || "Failed");
+    if (r.ok) loadReview();
+  };
+  return f;
+}
+
+async function loadReview() {
+  const r = await fetch("/api/review");
+  if (!r.ok) return;
+  const { flagged, fixes, runs, schedule } = await r.json();
+  const fb = document.getElementById("flagged"); fb.innerHTML = "";
+  if (!flagged.length) { const tr = mk("tr"); tr.appendChild(td("Nothing waiting 🎉")); fb.appendChild(tr); }
+  for (const q of flagged) {
+    const tr = mk("tr");
+    tr.append(td(when(q.ts)), td(q.question, "q"),
+              td(((q.hint ? "💡 " + q.hint + "\n" : "") + (q.answer || "")).slice(0, 300), "q"));
+    const c = td(""); c.appendChild(correctionForm(q)); tr.appendChild(c);
+    fb.appendChild(tr);
+  }
+  document.getElementById("schedule").textContent = schedule.enabled
+    ? `Nightly review at ${schedule.time} (${schedule.tz}), budget $${schedule.budget_usd}/night`
+    : "Nightly review is off (needs ANTHROPIC_API_KEY and REVIEW_ENABLED=true)";
+  const rc = document.getElementById("runs"); rc.innerHTML = "";
+  for (const x of runs.slice(0, 6)) {
+    rc.appendChild(mk("div", { className: "card" },
+      `${when(x.started)} · ${x.mode} · ${x.status}: ${x.items} checked, ${x.fixed} fixed, ` +
+      `${x.correct} ok, ${x.not_in_book} not in book, ${x.rejected} rejected · $${(x.cost_usd || 0).toFixed(3)}` +
+      (x.note ? ` · ${x.note}` : "")));
+  }
+  const fx = document.getElementById("fixes"); fx.innerHTML = "";
+  for (const f of fixes) {
+    const tr = mk("tr", { className: "fixrow" + (f.status === "undone" ? " undone" : "") });
+    tr.append(td(when(f.ts)), td(f.origin), td(f.verdict), td(f.question, "q"),
+              td(((f.hint ? "💡 " + f.hint + "\n" : "") + f.answer), "q"), td(f.source),
+              td((f.old_answer || "").slice(0, 200), "q"));
+    tr.children[4].style.whiteSpace = "pre-wrap";
+    if (f.note) tr.children[2].title = f.note;
+    const act = td("");
+    if (f.status === "active") {
+      const u = mk("button", { className: "ghost", type: "button" }, "Undo");
+      u.onclick = async () => { await fetch(`/api/fixes/${f.id}/undo`, { method: "POST" }); loadReview(); };
+      act.appendChild(u);
+    } else act.textContent = "undone";
+    tr.appendChild(act);
+    fx.appendChild(tr);
+  }
+}
+
+async function loadLog() {
   const r = await fetch("/api/log");
   if (!r.ok) { location.href = "/login"; return; }
   const { summary, rows } = await r.json();
   const cards = document.getElementById("cards"); cards.innerHTML = "";
-  const total = document.createElement("div"); total.className = "card";
-  total.textContent = `${summary.total_questions} questions · Claude cost $${summary.total_cost_usd.toFixed(4)}`;
-  cards.appendChild(total);
+  cards.appendChild(mk("div", { className: "card" },
+    `${summary.total_questions} questions · Claude cost $${summary.total_cost_usd.toFixed(4)}`));
   for (const p of summary.by_path) {
-    const c = document.createElement("div"); c.className = "card";
-    c.textContent = `${p.route} / ${p.reason}: ${p.n} (avg ${Math.round(p.ms || 0)} ms, $${p.cost.toFixed(4)})`;
-    cards.appendChild(c);
+    cards.appendChild(mk("div", { className: "card" },
+      `${p.route} / ${p.reason}: ${p.n} (👍${p.up || 0} 👎${p.down || 0}, avg ${Math.round(p.ms || 0)} ms, $${p.cost.toFixed(4)})`));
   }
   const body = document.getElementById("rows"); body.innerHTML = "";
   for (const x of rows) {
-    const tr = document.createElement("tr");
-    tr.appendChild(td(new Date(x.ts * 1000).toLocaleString()));
+    const tr = mk("tr");
+    tr.appendChild(td(when(x.ts)));
     tr.appendChild(td((x.had_image ? "📷 " : "") + x.question, "q"));
-    const path = td(""); const tag = document.createElement("span");
-    tag.className = "tag " + x.route; tag.textContent = x.route; path.appendChild(tag); tr.appendChild(path);
+    const path = td(""); path.appendChild(mk("span", { className: "tag " + x.route }, x.route)); tr.appendChild(path);
     tr.appendChild(td(x.reason));
     tr.appendChild(td(x.top_score == null ? "" : x.top_score.toFixed(2)));
     const ans = td(((x.hint ? "💡 " + x.hint + "\n" : "") + (x.answer || "")).slice(0, 400), "q");
     ans.style.whiteSpace = "pre-wrap"; ans.title = x.local_attempt ? "Local model said: " + x.local_attempt : "";
     tr.appendChild(ans);
     tr.appendChild(td(x.source));
+    tr.appendChild(td(x.feedback === 1 ? "👍" : x.feedback === -1 ? "👎" : ""));
     tr.appendChild(td(x.latency_ms));
     tr.appendChild(td(x.cost_usd ? x.cost_usd.toFixed(4) : "0"));
     body.appendChild(tr);
   }
 }
+
+document.getElementById("runNow").onclick = async () => {
+  const msg = document.getElementById("runmsg");
+  const j = await (await fetch("/api/review/run", { method: "POST" })).json();
+  msg.textContent = j.started ? "Reviewing… (refresh in a minute)" : j.detail;
+  if (j.started) setTimeout(() => { loadReview(); loadLog(); msg.textContent = ""; }, 60000);
+};
+
 document.getElementById("up").onsubmit = async (e) => {
   e.preventDefault();
   const msg = document.getElementById("upmsg");
@@ -81,6 +189,11 @@ document.getElementById("up").onsubmit = async (e) => {
     : "Failed: " + (j.detail || r.statusText);
   if (r.ok) e.target.reset();
 };
-load();
+
+(async () => {
+  const r = await fetch("/api/books");
+  if (r.ok) BOOKS = await r.json();
+  loadLog(); loadReview();
+})();
 </script>
 </body></html>

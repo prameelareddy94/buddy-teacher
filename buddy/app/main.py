@@ -6,14 +6,18 @@ import logging
 import secrets
 import shutil
 import tempfile
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from buddy.books import BOOKS
+from buddy import fixes, logs, review
+from buddy.books import BOOKS, SUBJECTS
 from buddy.config import get_settings
 from buddy.ingest.pdf import image_to_page
 from buddy.llm import ollama
@@ -30,7 +34,41 @@ if not secret:
     log.warning("SESSION_SECRET not set; logins reset whenever the server restarts")
     secret = secrets.token_hex(32)
 
-app = FastAPI(title="Buddy Teacher", docs_url=None, redoc_url=None, openapi_url=None)
+def next_review_at(now: datetime, hhmm: str, tz: str) -> datetime:
+    """Next time the clock in `tz` shows hh:mm (returned in that zone)."""
+    h, m = (int(x) for x in hhmm.split(":"))
+    local = now.astimezone(ZoneInfo(tz))
+    at = local.replace(hour=h, minute=m, second=0, microsecond=0)
+    return at if at > local else at + timedelta(days=1)
+
+
+async def review_scheduler() -> None:
+    while True:
+        s = get_settings()
+        now = datetime.now(ZoneInfo(s.review_tz))
+        wait = (next_review_at(now, s.review_time, s.review_tz) - now).total_seconds()
+        await asyncio.sleep(max(wait, 1))
+        try:
+            result = await asyncio.to_thread(review.run, "batch")
+            log.info("nightly review: %s", result)
+        except Exception:
+            log.exception("nightly review failed")
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    s = get_settings()
+    task = None
+    if s.review_enabled and s.anthropic_api_key:
+        task = asyncio.create_task(review_scheduler())
+        log.info("nightly review scheduled daily at %s %s", s.review_time, s.review_tz)
+    yield
+    if task:
+        task.cancel()
+
+
+app = FastAPI(title="Buddy Teacher", docs_url=None, redoc_url=None, openapi_url=None,
+              lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=secret, max_age=60 * 60 * 24 * 30,
                    same_site="strict", https_only=False)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -95,7 +133,7 @@ def logout(request: Request):
 
 @app.get("/api/me")
 def me(r: str = Depends(need_kid)):
-    return {"role": r, "subjects": [{"key": b.subject, "label": b.label} for b in BOOKS.values()]}
+    return {"role": r, "subjects": [{"key": k, "label": v} for k, v in SUBJECTS.items()]}
 
 
 @app.post("/api/ask")
@@ -114,7 +152,7 @@ async def ask(
         img = (await asyncio.to_thread(image_to_page, raw, 1)).jpeg  # resized JPEG
     if not question.strip() and not img and not explain_more_of:
         raise HTTPException(400, "Ask a question or add a photo")
-    a = Ask(question=question[:1000], subject=subject if subject in BOOKS else None,
+    a = Ask(question=question[:1000], subject=subject if subject in SUBJECTS else None,
             image=img, image_type="image/jpeg", explain_more_of=explain_more_of)
 
     async def events():
@@ -134,18 +172,37 @@ async def ask(
 
 @app.get("/api/chapters")
 def chapters(subject: str, _: str = Depends(need_kid)):
-    got = store.get_by({"$and": [{"subject": subject}, {"kind": "explain"}]}, limit=500)
+    """Ingested chapters for a subject, current class first."""
+    got = store.get_by({"$and": [{"subject": subject}, {"kind": "explain"},
+                                 {"source": "ncert"}]}, limit=2000)
     seen = {}
     for h in got:
-        seen[h.meta["chapter"]] = h.meta.get("chapter_title", "")
-    return [{"chapter": c, "title": t} for c, t in sorted(seen.items())]
+        key = h.meta.get("book", subject)
+        seen[(key, h.meta["chapter"])] = (h.meta.get("grade", 4), h.meta.get("chapter_title", ""))
+    rows = [{"book": b, "chapter": c, "grade": g, "title": t,
+             "label": BOOKS[b].label if b in BOOKS else b}
+            for (b, c), (g, t) in seen.items()]
+    return sorted(rows, key=lambda r: (-r["grade"], r["chapter"]))
 
 
 @app.post("/api/quiz")
-async def quiz(subject: str = Form(...), chapter: int = Form(...), _: str = Depends(need_kid)):
+async def quiz(book: str = Form(...), chapter: int = Form(...), _: str = Depends(need_kid)):
     from buddy.app.quiz import make_quiz
 
-    return {"questions": await make_quiz(subject, chapter)}
+    if book not in BOOKS:
+        raise HTTPException(400, "Unknown book")
+    return {"questions": await make_quiz(book, chapter)}
+
+
+@app.post("/api/feedback")
+def feedback(id: int = Form(...), vote: str = Form(...), _: str = Depends(need_kid)):
+    if vote not in ("up", "down"):
+        raise HTTPException(400, "vote must be up or down")
+    try:
+        fixes.feedback(id, 1 if vote == "up" else -1)
+    except KeyError:
+        raise HTTPException(404, "No such answer")
+    return {"ok": True}
 
 
 # ---------- parent API ----------
@@ -153,6 +210,61 @@ async def quiz(subject: str = Form(...), chapter: int = Form(...), _: str = Depe
 @app.get("/api/log")
 def get_log(limit: int = 200, _: str = Depends(need_parent)):
     return {"summary": summary(), "rows": recent(limit)}
+
+
+@app.get("/api/books")
+def books(_: str = Depends(need_parent)):
+    return [{"key": b.key, "label": b.label, "title": b.title} for b in BOOKS.values()]
+
+
+@app.get("/api/review")
+def review_state(_: str = Depends(need_parent)):
+    s = get_settings()
+    return {"flagged": logs.flagged_unfixed(), "fixes": logs.list_fixes(),
+            "runs": logs.list_runs(),
+            "schedule": {"enabled": s.review_enabled and bool(s.anthropic_api_key),
+                         "time": s.review_time, "tz": s.review_tz,
+                         "budget_usd": s.review_budget_usd}}
+
+
+@app.post("/api/review/run")
+async def review_now(_: str = Depends(need_parent)):
+    """Review pending answers right away (normal API: full price, done in about a minute)."""
+    if not review._lock.locked():
+        asyncio.get_running_loop().run_in_executor(None, review.run, "direct")
+        return {"started": True}
+    return {"started": False, "detail": "A review is already running"}
+
+
+@app.post("/api/fixes/{fix_id}/undo")
+def undo_fix(fix_id: int, _: str = Depends(need_parent)):
+    if not logs.get_fix(fix_id):
+        raise HTTPException(404, "No such fix")
+    fixes.undo(fix_id)
+    return {"ok": True}
+
+
+@app.post("/api/correct")
+def correct(
+    question_id: int = Form(...),
+    answer: str = Form(""),
+    hint: str = Form(""),
+    book: str = Form(""),
+    chapter: int = Form(0),
+    page: int = Form(0),
+    not_in_book: bool = Form(False),
+    _: str = Depends(need_parent),
+):
+    if not not_in_book and not answer.strip():
+        raise HTTPException(400, "Write the answer, or tick 'not in the book'")
+    try:
+        fix_id = fixes.parent_fix(question_id, answer, hint, book or None, chapter or None,
+                                  page or None, not_in_book)
+    except KeyError:
+        raise HTTPException(404, "No such question")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"fix_id": fix_id}
 
 
 @app.post("/api/upload")
