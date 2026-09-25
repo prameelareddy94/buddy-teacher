@@ -27,13 +27,31 @@ def split_text(text: str, size: int = CHUNK_CHARS) -> list[str]:
     return chunks
 
 
+def printed_pages(page_numbers: list[dict]) -> dict[int, int]:
+    """pdf page -> printed page. Pages with no printed number (unit openers, full-page
+    pictures) take the number implied by the nearest numbered page, so chapter 2's
+    unnumbered opener is cited as e.g. page 17, not page 1."""
+    known = {p["pdf_page"]: p["printed_page"] for p in page_numbers if p["printed_page"] > 0}
+    out = {}
+    for p in page_numbers:
+        pdf = p["pdf_page"]
+        if pdf in known:
+            out[pdf] = known[pdf]
+        elif known:
+            near = min(known, key=lambda k: (abs(k - pdf), k))
+            out[pdf] = max(1, known[near] + (pdf - near))
+        else:
+            out[pdf] = pdf
+    return out
+
+
 def index_chapter(book_key: str, chapter: int) -> int:
     book = get_book(book_key)
     data = json.loads(processed_path(book_key, chapter).read_text())["result"]
-    printed = {p["pdf_page"]: p["printed_page"] for p in data["page_numbers"]}
+    printed = printed_pages(data["page_numbers"])
 
     def pg(pdf_pages: list[int]) -> list[int]:
-        return [printed.get(p) or p for p in pdf_pages] or [0]
+        return [printed.get(p, p) for p in pdf_pages] or [0]
 
     title = data["chapter_title"]
     ids, texts, metas = [], [], []

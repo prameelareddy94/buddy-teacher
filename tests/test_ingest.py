@@ -159,3 +159,15 @@ def test_workspace_header(monkeypatch):
     claude.async_client.cache_clear()
     assert claude.sync_client().default_headers["anthropic-workspace-id"] == "wrkspc_test"
     assert claude.async_client().default_headers["anthropic-workspace-id"] == "wrkspc_test"
+
+
+def test_printed_pages_infers_unnumbered_pages():
+    from buddy.ingest.index import printed_pages
+
+    ch1 = [{"pdf_page": i, "printed_page": 0 if i <= 3 else i} for i in range(1, 6)]
+    assert printed_pages(ch1) == {1: 1, 2: 2, 3: 3, 4: 4, 5: 5}
+    ch2 = [{"pdf_page": 1, "printed_page": 0}, {"pdf_page": 2, "printed_page": 0},
+           {"pdf_page": 3, "printed_page": 19}, {"pdf_page": 4, "printed_page": 20},
+           {"pdf_page": 5, "printed_page": 0}]
+    assert printed_pages(ch2) == {1: 17, 2: 18, 3: 19, 4: 20, 5: 21}
+    assert printed_pages([{"pdf_page": 1, "printed_page": 0}]) == {1: 1}
