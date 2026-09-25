@@ -1,0 +1,110 @@
+import json
+from types import SimpleNamespace
+
+from buddy.books import get_book
+from buddy.config import get_settings
+from buddy.ingest import batch
+from buddy.ingest.download import chapter_pdf_path
+from buddy.ingest.index import index_chapter, split_text
+from buddy.ingest.pdf import load_pages
+from buddy.rag import store
+from tests.conftest import SAMPLE_RESULT, make_pdf
+
+
+def put_sample_pdf():
+    p = chapter_pdf_path("evs", 1)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    make_pdf(p, ["Plants make their own food.", "Trees give shade and homes to birds."])
+    return p
+
+
+def test_load_pages_text_and_image():
+    pages = load_pages(put_sample_pdf())
+    assert len(pages) == 2
+    assert "Plants make" in pages[0].text
+    assert pages[0].jpeg[:2] == b"\xff\xd8"
+
+
+def test_chapter_request_shape():
+    put_sample_pdf()
+    params = batch.chapter_params(get_book("evs"), 1)
+    assert params["model"] == "claude-sonnet-5"
+    content = params["messages"][0]["content"]
+    assert sum(1 for b in content if b["type"] == "image") == 2
+    assert any("PDF text layer" in b.get("text", "") for b in content)
+    fmt = params["output_config"]["format"]
+    assert fmt["type"] == "json_schema" and fmt["schema"]["additionalProperties"] is False
+
+
+def test_image_mode_skips_text_layer():
+    p = chapter_pdf_path("hindi", 1)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    make_pdf(p, ["garbled legacy font text"])
+    content = batch.chapter_params(get_book("hindi"), 1)["messages"][0]["content"]
+    assert not any("PDF text layer" in b.get("text", "") for b in content)
+
+
+def fake_batch_client(result: dict):
+    msg = SimpleNamespace(
+        stop_reason="end_turn", model="claude-sonnet-5",
+        content=[SimpleNamespace(type="text", text=json.dumps(result))],
+        usage=SimpleNamespace(input_tokens=20_000, output_tokens=9_000),
+    )
+    item = SimpleNamespace(custom_id="evs-ch01",
+                           result=SimpleNamespace(type="succeeded", message=msg))
+    return SimpleNamespace(messages=SimpleNamespace(batches=SimpleNamespace(
+        results=lambda _id: [item])))
+
+
+def test_collect_index_search_end_to_end():
+    put_sample_pdf()
+    reports = batch.collect(fake_batch_client(SAMPLE_RESULT), "msgbatch_test")
+    assert reports[0]["status"] == "ok"
+    # Sonnet 5 batch price: (20k*$2 + 9k*$10)/1M * 0.5
+    assert reports[0]["cost_usd"] == round((20_000 * 2 + 9_000 * 10) / 1e6 * 0.5, 4)
+    assert batch.cost_history()[0]["id"] == "evs-ch01"
+    assert batch.processed_path("evs", 1).exists()
+
+    n = index_chapter("evs", 1)
+    assert n == 2 + 2 + 1 + 2 + 1  # text, explain, diagram, qa, vocab
+    hits = store.search("what do plants need to make food", subject="evs")
+    assert hits and hits[0].meta["subject"] == "evs"
+    assert hits[0].meta["cite"].startswith("EVS, Chapter 1, page ")
+    # printed page numbers (5, 6) are used, not PDF indexes
+    assert {h.meta["page"] for h in hits} <= {5, 6}
+
+    # re-indexing replaces rather than duplicates
+    assert index_chapter("evs", 1) == n
+    assert store.get_collection().count() == n
+
+
+def test_gate_requires_first_measurement(capsys):
+    import pytest
+    from buddy.ingest.__main__ import gate
+
+    with pytest.raises(SystemExit):
+        gate([("evs", 1), ("evs", 2)], force=False)
+    gate([("evs", 1)], force=False)  # one chapter is always allowed
+    gate([("evs", 1), ("evs", 2)], force=True)
+
+
+def test_split_text_limits():
+    chunks = split_text("word " * 1000)
+    assert all(len(c) <= 1400 for c in chunks) and len(chunks) > 3
+
+
+def test_settings_paths():
+    s = get_settings()
+    assert s.raw_dir.parent == s.data_dir
+
+
+def test_photo_upload_is_resized_to_jpeg():
+    import pymupdf
+
+    from buddy.ingest.pdf import MAX_SIDE, image_to_page
+
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 3000, 4000), False)
+    pix.clear_with(200)
+    page = image_to_page(pix.tobytes("jpg"), 1)
+    out = pymupdf.Pixmap(page.jpeg)
+    assert page.jpeg[:2] == b"\xff\xd8" and max(out.width, out.height) <= MAX_SIDE + 1

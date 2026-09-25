@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ff8a3d">
+<title>Buddy Teacher</title><link rel="stylesheet" href="/static/style.css">
+</head><body>
+<div class="app">
+  <header>
+    <h1>🦉 Buddy</h1>
+    <button class="ghost" id="quizBtn">🎯 Quiz me</button>
+    <a id="parentLink" href="/parent" hidden><button class="ghost">👪</button></a>
+    <form method="post" action="/logout"><button class="ghost" title="Log out">🚪</button></form>
+  </header>
+  <div class="subjects" id="subjects"></div>
+  <div id="chat">
+    <div class="msg buddy">Hi! I'm Buddy 🦉 Ask me anything from your school books.
+You can also take a 📷 photo of a question.</div>
+  </div>
+  <div id="preview"></div>
+  <form class="ask" id="askForm">
+    <label class="photo-btn" style="display:flex;align-items:center;justify-content:center;border-radius:14px;min-height:52px;color:#fff;cursor:pointer">
+      📷<input type="file" id="photo" accept="image/*" capture="environment" hidden>
+    </label>
+    <textarea id="q" rows="1" placeholder="Type your question…" enterkeyhint="send"></textarea>
+    <button id="send" type="submit">Ask</button>
+  </form>
+</div>
+<script src="/static/app.js"></script>
+</body></html>

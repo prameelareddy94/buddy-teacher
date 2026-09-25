@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Buddy Parent View</title><link rel="stylesheet" href="/static/style.css">
+</head><body>
+<div class="parent">
+  <header style="padding:0">
+    <h1>👪 Parent view</h1>
+    <a href="/"><button class="ghost">Chat</button></a>
+    <form method="post" action="/logout"><button class="ghost">Log out</button></form>
+  </header>
+
+  <h2>Upload school material</h2>
+  <form id="up">
+    <input type="file" name="files" multiple accept=".pdf,image/*" required>
+    <select name="subject">
+      <option value="unknown">Subject: let Buddy guess</option>
+      <option value="evs">EVS</option><option value="english">English</option>
+      <option value="maths">Maths</option><option value="hindi">Hindi</option>
+      <option value="kannada">Kannada</option>
+    </select>
+    <label>Chapter <input type="number" name="chapter" value="0" min="0" style="width:70px"></label>
+    <select name="kind">
+      <option value="worksheet">Worksheet</option>
+      <option value="notes">Class notes</option>
+      <option value="test paper">Test paper</option>
+    </select>
+    <button type="submit">Upload</button>
+    <span id="upmsg"></span>
+  </form>
+
+  <h2>Questions and which path answered them</h2>
+  <div class="cards" id="cards"></div>
+  <table>
+    <thead><tr><th>When</th><th>Question</th><th>Path</th><th>Why</th><th>Score</th>
+      <th>Answer</th><th>Source</th><th>ms</th><th>$</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+<script>
+function td(text, cls) { const d = document.createElement("td"); d.textContent = text ?? ""; if (cls) d.className = cls; return d; }
+async function load() {
+  const r = await fetch("/api/log");
+  if (!r.ok) { location.href = "/login"; return; }
+  const { summary, rows } = await r.json();
+  const cards = document.getElementById("cards"); cards.innerHTML = "";
+  const total = document.createElement("div"); total.className = "card";
+  total.textContent = `${summary.total_questions} questions · Claude cost $${summary.total_cost_usd.toFixed(4)}`;
+  cards.appendChild(total);
+  for (const p of summary.by_path) {
+    const c = document.createElement("div"); c.className = "card";
+    c.textContent = `${p.route} / ${p.reason}: ${p.n} (avg ${Math.round(p.ms || 0)} ms, $${p.cost.toFixed(4)})`;
+    cards.appendChild(c);
+  }
+  const body = document.getElementById("rows"); body.innerHTML = "";
+  for (const x of rows) {
+    const tr = document.createElement("tr");
+    tr.appendChild(td(new Date(x.ts * 1000).toLocaleString()));
+    tr.appendChild(td((x.had_image ? "📷 " : "") + x.question, "q"));
+    const path = td(""); const tag = document.createElement("span");
+    tag.className = "tag " + x.route; tag.textContent = x.route; path.appendChild(tag); tr.appendChild(path);
+    tr.appendChild(td(x.reason));
+    tr.appendChild(td(x.top_score == null ? "" : x.top_score.toFixed(2)));
+    const ans = td(((x.hint ? "💡 " + x.hint + "\n" : "") + (x.answer || "")).slice(0, 400), "q");
+    ans.style.whiteSpace = "pre-wrap"; ans.title = x.local_attempt ? "Local model said: " + x.local_attempt : "";
+    tr.appendChild(ans);
+    tr.appendChild(td(x.source));
+    tr.appendChild(td(x.latency_ms));
+    tr.appendChild(td(x.cost_usd ? x.cost_usd.toFixed(4) : "0"));
+    body.appendChild(tr);
+  }
+}
+document.getElementById("up").onsubmit = async (e) => {
+  e.preventDefault();
+  const msg = document.getElementById("upmsg");
+  msg.textContent = "Reading… (can take a minute)";
+  const r = await fetch("/api/upload", { method: "POST", body: new FormData(e.target) });
+  const j = await r.json();
+  msg.textContent = r.ok
+    ? `Saved "${j.title}" (${j.subject}, ch ${j.chapter}): ${j.questions} questions, ${j.chunks} chunks, $${j.usage.cost_usd}`
+    : "Failed: " + (j.detail || r.statusText);
+  if (r.ok) e.target.reset();
+};
+load();
+</script>
+</body></html>

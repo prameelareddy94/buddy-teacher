@@ -1,0 +1,187 @@
+"""Ingestion CLI.
+
+  python -m buddy.ingest run evs 1          # end-to-end for one chapter (download,
+                                            # batch, wait, save, index, cost report)
+  python -m buddy.ingest estimate evs 1     # token count + projected cost, no spend
+  python -m buddy.ingest costs              # measured costs + projection for all books
+  python -m buddy.ingest submit evs 2-10    # rest of a book (after the first is measured)
+  python -m buddy.ingest collect <batch_id> [--wait]
+  python -m buddy.ingest download evs all
+  python -m buddy.ingest index evs 1-10
+  python -m buddy.ingest upload file.pdf --subject maths --chapter 3 --kind worksheet
+"""
+import argparse
+import sys
+from pathlib import Path
+
+from buddy.books import BOOKS, get_book
+from buddy.config import INGEST_MODEL, cost_usd, get_settings
+from buddy.ingest import batch
+from buddy.ingest.download import available_chapters, download_chapter
+from buddy.ingest.index import index_chapter
+
+
+def client():
+    import anthropic
+
+    key = get_settings().anthropic_api_key
+    if not key:
+        sys.exit("ANTHROPIC_API_KEY is not set in .env")
+    return anthropic.Anthropic(api_key=key)
+
+
+def parse_chapters(subject: str, spec: str) -> list[int]:
+    if spec == "all":
+        return available_chapters(get_book(subject))
+    out: list[int] = []
+    for part in spec.split(","):
+        if "-" in part:
+            a, b = part.split("-")
+            out.extend(range(int(a), int(b) + 1))
+        else:
+            out.append(int(part))
+    return out
+
+
+def print_reports(reports: list[dict]) -> None:
+    for r in reports:
+        if r["status"] != "ok":
+            print(f"  {r['id']}: FAILED ({r['status']}) {r.get('detail', '')}")
+            continue
+        print(f"  {r['id']}: {r['topics']} topics, {r['qa_pairs']} Q&A, "
+              f"in={r['input_tokens']:,} out={r['output_tokens']:,} tok, ${r['cost_usd']:.4f}")
+
+
+def cmd_download(a):
+    for ch in parse_chapters(a.subject, a.chapters):
+        print(f"{a.subject} ch{ch:02d} -> {download_chapter(get_book(a.subject), ch, a.force)}")
+
+
+def cmd_estimate(a):
+    c = client()
+    for ch in parse_chapters(a.subject, a.chapters):
+        download_chapter(get_book(a.subject), ch)
+        n = batch.count_input_tokens(c, batch.chapter_params(get_book(a.subject), ch))
+        guess_out = 12_000  # rough; replaced by the measured number after the first run
+        print(f"{a.subject} ch{ch:02d}: {n:,} input tokens -> "
+              f"~${cost_usd(INGEST_MODEL, n, guess_out, batch=True):.3f} "
+              f"(assuming ~{guess_out:,} output tokens incl. thinking, batch price)")
+
+
+def gate(items: list[tuple[str, int]], force: bool) -> None:
+    if len(items) > 1 and not batch.cost_history() and not force:
+        sys.exit("No chapter has been measured yet. Run ONE chapter first "
+                 "(python -m buddy.ingest run evs 1), check `costs`, then submit the rest. "
+                 "Use --force to skip this check.")
+
+
+def cmd_submit(a):
+    items = [(a.subject, ch) for ch in parse_chapters(a.subject, a.chapters)]
+    gate(items, a.force)
+    for s, ch in items:
+        download_chapter(get_book(s), ch)
+    bid = batch.submit(client(), items)
+    print(f"Submitted batch {bid} with {len(items)} chapter(s).")
+    print(f"Collect later with: python -m buddy.ingest collect {bid} --wait")
+
+
+def cmd_collect(a):
+    c = client()
+    if a.wait:
+        batch.wait(c, a.batch_id)
+    reports = batch.collect(c, a.batch_id)
+    print_reports(reports)
+    for r in reports:
+        if r["status"] == "ok" and not a.no_index:
+            n = index_chapter(r["subject"], r["chapter"])
+            print(f"  indexed {r['id']}: {n} chunks")
+
+
+def cmd_run(a):
+    book = get_book(a.subject)
+    ch = int(a.chapter)
+    print(f"1/4 download {book.label} ch{ch:02d}")
+    download_chapter(book, ch)
+    c = client()
+    print(f"2/4 submit batch ({INGEST_MODEL}, 50% batch price)")
+    bid = batch.submit(c, [(a.subject, ch)])
+    print(f"    batch id {bid} (safe to Ctrl-C; resume with `collect {bid} --wait`)")
+    print("3/4 wait for results")
+    batch.wait(c, bid)
+    reports = batch.collect(c, bid)
+    print_reports(reports)
+    ok = [r for r in reports if r["status"] == "ok"]
+    if not ok:
+        sys.exit("Chapter failed; nothing indexed.")
+    print(f"4/4 index into ChromaDB: {index_chapter(a.subject, ch)} chunks")
+    cmd_costs(a)
+
+
+def cmd_index(a):
+    for ch in parse_chapters(a.subject, a.chapters):
+        print(f"{a.subject} ch{ch:02d}: {index_chapter(a.subject, ch)} chunks")
+
+
+def cmd_costs(_a):
+    hist = batch.cost_history()
+    if not hist:
+        print("No chapters processed yet.")
+        return
+    total = sum(r["cost_usd"] for r in hist)
+    avg = total / len(hist)
+    done = {(r["subject"], r["chapter"]) for r in hist}
+    remaining = sum(
+        1 for b in BOOKS.values() if b.chapters
+        for ch in range(1, b.chapters + 1) if (b.subject, ch) not in done
+    )
+    print(f"Measured: {len(hist)} chapter(s), ${total:.4f} total, ${avg:.4f} per chapter "
+          f"(avg in={sum(r['input_tokens'] for r in hist)//len(hist):,} "
+          f"out={sum(r['output_tokens'] for r in hist)//len(hist):,} tokens)")
+    print(f"Projection: {remaining} NCERT chapters left -> ~${avg * remaining:.2f} "
+          "(Hindi pages are image-only, so expect those to differ a little; "
+          "Kannada not counted until its book is chosen)")
+
+
+def cmd_upload(a):
+    from buddy.ingest.uploads import ingest_upload
+
+    r = ingest_upload(Path(a.file), a.subject, a.chapter, a.kind)
+    print(r)
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="python -m buddy.ingest")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    def with_sc(name, fn, chapter_arg="chapters"):
+        sp = sub.add_parser(name)
+        sp.add_argument("subject", choices=list(BOOKS))
+        sp.add_argument(chapter_arg)
+        sp.set_defaults(fn=fn)
+        return sp
+
+    with_sc("download", cmd_download).add_argument("--force", action="store_true")
+    with_sc("estimate", cmd_estimate)
+    with_sc("submit", cmd_submit).add_argument("--force", action="store_true")
+    with_sc("index", cmd_index)
+    with_sc("run", cmd_run, "chapter")
+    sp = sub.add_parser("collect")
+    sp.add_argument("batch_id")
+    sp.add_argument("--wait", action="store_true")
+    sp.add_argument("--no-index", action="store_true")
+    sp.set_defaults(fn=cmd_collect)
+    sub.add_parser("costs").set_defaults(fn=cmd_costs)
+    sp = sub.add_parser("upload")
+    sp.add_argument("file")
+    sp.add_argument("--subject", default="unknown")
+    sp.add_argument("--chapter", type=int, default=0)
+    sp.add_argument("--kind", default="worksheet",
+                    choices=["worksheet", "notes", "test paper"])
+    sp.set_defaults(fn=cmd_upload)
+
+    a = p.parse_args(argv)
+    a.fn(a)
+
+
+if __name__ == "__main__":
+    main()

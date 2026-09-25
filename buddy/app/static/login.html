@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Buddy Teacher</title><link rel="stylesheet" href="/static/style.css">
+</head><body>
+<form class="center" method="post" action="/login">
+  <div style="font-size:64px">🦉</div>
+  <h1>Buddy Teacher</h1>
+  <input type="password" name="password" placeholder="Password" autofocus required>
+  <button type="submit" style="width:100%">Let's study!</button>
+  <p class="err" id="err" hidden>That password didn't work. Try again!</p>
+</form>
+<script>if (location.search.includes("bad")) document.getElementById("err").hidden = false;</script>
+</body></html>
