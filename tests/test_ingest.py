@@ -108,3 +108,42 @@ def test_photo_upload_is_resized_to_jpeg():
     page = image_to_page(pix.tobytes("jpg"), 1)
     out = pymupdf.Pixmap(page.jpeg)
     assert page.jpeg[:2] == b"\xff\xd8" and max(out.width, out.height) <= MAX_SIDE + 1
+
+
+def test_add_pdf_and_zip(tmp_path):
+    import zipfile
+
+    import pytest
+
+    from buddy.ingest.download import add_pdf, add_zip
+
+    src = tmp_path / "deev103.pdf"
+    make_pdf(src, ["hello"])
+    assert add_pdf(get_book("evs"), 3, src) == chapter_pdf_path("evs", 3)
+    bad = tmp_path / "x.pdf"
+    bad.write_text("<html>blocked</html>")
+    with pytest.raises(SystemExit):
+        add_pdf(get_book("evs"), 4, bad)
+
+    z = tmp_path / "deev1dd.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("deev1ps.pdf", src.read_bytes())       # prelims: skipped
+        zf.writestr("deev1dd/deev101.pdf", src.read_bytes())
+        zf.writestr("deev102.pdf", src.read_bytes())
+    assert add_zip(get_book("evs"), z) == [chapter_pdf_path("evs", 1), chapter_pdf_path("evs", 2)]
+
+
+def test_download_failure_explains_manual_route(monkeypatch):
+    import httpx
+    import pytest
+
+    from buddy.ingest import download
+
+    def timeout(*a, **k):
+        raise httpx.ConnectTimeout("timed out")
+
+    monkeypatch.setattr(download.httpx, "stream", timeout)
+    monkeypatch.setattr(download.time, "sleep", lambda s: None)
+    with pytest.raises(SystemExit) as e:
+        download.download_chapter(get_book("evs"), 1)
+    assert "add-pdf evs 1" in str(e.value) and "deev1dd.zip" in str(e.value)

@@ -70,6 +70,15 @@ python -m buddy.ingest run evs 1        # download → batch → wait → save �
 python -m buddy.ingest costs            # measured $/chapter and projection for all books
 ```
 
+**If the download times out**, ncert.nic.in is probably unreachable from your network. It
+is often slow or blocked outside India. Download the PDF in a browser (a VPN helps) and
+import it. `run` then skips the download step:
+
+```bash
+python -m buddy.ingest add-pdf evs 1 ~/Downloads/deev101.pdf    # one chapter
+python -m buddy.ingest add-zip evs ~/Downloads/deev1dd.zip      # whole book (ncert.nic.in/textbook/pdf/deev1dd.zip)
+```
+
 `run` prints the real input/output tokens and dollars for the chapter. It also appends
 them to `data/ingest_costs.jsonl`. **Multi-chapter submits are refused until one chapter
 has been measured** (`--force` skips this). After checking the cost:

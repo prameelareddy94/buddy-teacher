@@ -7,6 +7,8 @@
   python -m buddy.ingest submit evs 2-10    # rest of a book (after the first is measured)
   python -m buddy.ingest collect <batch_id> [--wait]
   python -m buddy.ingest download evs all
+  python -m buddy.ingest add-pdf evs 1 ~/Downloads/deev101.pdf   # if ncert.nic.in is unreachable
+  python -m buddy.ingest add-zip evs ~/Downloads/deev1dd.zip     # whole book at once
   python -m buddy.ingest index evs 1-10
   python -m buddy.ingest upload file.pdf --subject maths --chapter 3 --kind worksheet
 """
@@ -17,7 +19,7 @@ from pathlib import Path
 from buddy.books import BOOKS, get_book
 from buddy.config import INGEST_MODEL, cost_usd, get_settings
 from buddy.ingest import batch
-from buddy.ingest.download import available_chapters, download_chapter
+from buddy.ingest.download import add_pdf, add_zip, available_chapters, download_chapter
 from buddy.ingest.index import index_chapter
 
 
@@ -55,6 +57,16 @@ def print_reports(reports: list[dict]) -> None:
 def cmd_download(a):
     for ch in parse_chapters(a.subject, a.chapters):
         print(f"{a.subject} ch{ch:02d} -> {download_chapter(get_book(a.subject), ch, a.force)}")
+
+
+def cmd_add_pdf(a):
+    print(f"{a.subject} ch{int(a.chapter):02d} -> "
+          f"{add_pdf(get_book(a.subject), int(a.chapter), Path(a.file))}")
+
+
+def cmd_add_zip(a):
+    for p in add_zip(get_book(a.subject), Path(a.file)):
+        print(f"{a.subject} -> {p}")
 
 
 def cmd_estimate(a):
@@ -100,9 +112,9 @@ def cmd_collect(a):
 def cmd_run(a):
     book = get_book(a.subject)
     ch = int(a.chapter)
+    c = client()  # fail on a missing key before doing any work
     print(f"1/4 download {book.label} ch{ch:02d}")
     download_chapter(book, ch)
-    c = client()
     print(f"2/4 submit batch ({INGEST_MODEL}, 50% batch price)")
     bid = batch.submit(c, [(a.subject, ch)])
     print(f"    batch id {bid} (safe to Ctrl-C; resume with `collect {bid} --wait`)")
@@ -161,6 +173,12 @@ def main(argv=None):
         return sp
 
     with_sc("download", cmd_download).add_argument("--force", action="store_true")
+    sp = with_sc("add-pdf", cmd_add_pdf, "chapter")
+    sp.add_argument("file")
+    sp = sub.add_parser("add-zip")
+    sp.add_argument("subject", choices=list(BOOKS))
+    sp.add_argument("file")
+    sp.set_defaults(fn=cmd_add_zip)
     with_sc("estimate", cmd_estimate)
     with_sc("submit", cmd_submit).add_argument("--force", action="store_true")
     with_sc("index", cmd_index)
