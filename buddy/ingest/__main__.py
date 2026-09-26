@@ -14,12 +14,17 @@
 
 Books are named by key: the Class 4 book is the bare subject (evs, english, maths,
 hindi, kannada); older classes add the class: evs-c3, english-c1, maths-c2 ...
+
+Her school's own books (e.g. Orchids), from phone photos:
+  python -m buddy.ingest add-book orchids-evs --subject evs --name "EVS (school book)"
+  python -m buddy.ingest add-photos orchids-evs 3 ~/Pictures/evs-ch3/*.jpg --now
+  python -m buddy.ingest remove evs          # take a book out of search (e.g. NCERT EVS)
 """
 import argparse
 import sys
 from pathlib import Path
 
-from buddy.books import BOOKS, get_book
+from buddy.books import BOOKS, add_school_book, get_book, load_custom_books
 from buddy.config import INGEST_MODEL, cost_usd, get_settings
 from buddy.ingest import batch
 from buddy.ingest.download import add_pdf, add_zip, available_chapters, download_chapter
@@ -131,10 +136,51 @@ def cmd_collect(a):
             print(f"  indexed {r['id']}: {n} chunks")
 
 
+def cmd_add_book(a):
+    try:
+        b = add_school_book(a.key, a.subject, a.name, grade=a.grade, title=a.title or "")
+    except ValueError as e:
+        sys.exit(str(e))
+    print(f"Added school book {b.key}: {b.label} ({b.subject}, Class {b.grade}). "
+          f"Now add chapters: python -m buddy.ingest add-photos {b.key} 1 PHOTOS... --now")
+
+
+def cmd_add_photos(a):
+    from buddy.ingest.schoolbook import ingest_now, save_chapter_files
+
+    files = sorted(Path(f).expanduser() for f in a.files) if a.sort else \
+        [Path(f).expanduser() for f in a.files]
+    n = save_chapter_files(a.book, int(a.chapter), files)
+    print(f"{a.book} ch{int(a.chapter):02d}: {n} pages saved")
+    if a.now:
+        client()  # check the key first
+        r = ingest_now(a.book, int(a.chapter))
+        print(f"  {r['topics']} topics, {r['qa_pairs']} Q&A, {r['chunks']} chunks, "
+              f"${r['cost_usd']:.4f}")
+    else:
+        print(f"  Process it with: python -m buddy.ingest run {a.book} {a.chapter} [--now]")
+
+
+def cmd_remove(a):
+    from buddy.rag import store
+
+    store.delete_where({"$and": [{"book": a.book}, {"source": "ncert"}]})
+    print(f"Removed {a.book} from search. (Files are kept; `index {a.book} all` adds it back.)")
+
+
 def cmd_run(a):
     book = get_book(a.book)
     ch = int(a.chapter)
     c = client()  # fail on a missing key before doing any work
+    if a.now:
+        from buddy.ingest.schoolbook import ingest_now
+
+        if book.ncert_code:
+            download_chapter(book, ch)
+        r = ingest_now(a.book, ch, client=c)
+        print(f"  {r['topics']} topics, {r['qa_pairs']} Q&A, {r['chunks']} chunks, "
+              f"${r['cost_usd']:.4f} (normal API price)")
+        return
     print(f"1/4 download {book.label} ch{ch:02d}")
     download_chapter(book, ch)
     print(f"2/4 submit batch ({INGEST_MODEL}, 50% batch price)")
@@ -185,6 +231,7 @@ def cmd_upload(a):
 
 
 def main(argv=None):
+    load_custom_books()  # school books become valid book keys below
     p = argparse.ArgumentParser(prog="python -m buddy.ingest")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -205,7 +252,26 @@ def main(argv=None):
     with_sc("estimate", cmd_estimate)
     with_sc("submit", cmd_submit).add_argument("--force", action="store_true")
     with_sc("index", cmd_index)
-    with_sc("run", cmd_run, "chapter")
+    with_sc("run", cmd_run, "chapter").add_argument(
+        "--now", action="store_true", help="normal API now (full price) instead of a batch")
+    sp = sub.add_parser("add-book", help="register one of her school's own books")
+    sp.add_argument("key", help="e.g. orchids-evs")
+    sp.add_argument("--subject", required=True, choices=["evs", "english", "maths", "hindi",
+                                                         "kannada"])
+    sp.add_argument("--name", required=True, help='shown in citations, e.g. "EVS (school book)"')
+    sp.add_argument("--grade", type=int, default=4)
+    sp.add_argument("--title", default="")
+    sp.set_defaults(fn=cmd_add_book)
+    sp = sub.add_parser("add-photos", help="photos/PDFs of one chapter of a book")
+    sp.add_argument("book")
+    sp.add_argument("chapter")
+    sp.add_argument("files", nargs="+")
+    sp.add_argument("--now", action="store_true", help="read and index it right away")
+    sp.add_argument("--sort", action="store_true", help="order files by name")
+    sp.set_defaults(fn=cmd_add_photos)
+    sp = sub.add_parser("remove", help="take a book out of search")
+    sp.add_argument("book")
+    sp.set_defaults(fn=cmd_remove)
     sp = sub.add_parser("collect")
     sp.add_argument("batch_id")
     sp.add_argument("--wait", action="store_true")

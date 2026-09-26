@@ -32,6 +32,33 @@ from buddy.rag import store
 from buddy.rag.store import Hit
 
 KANNADA = re.compile(r"[ಀ-೿]")
+DEVANAGARI = re.compile(r"[ऀ-ॿ]")
+BLANK = "____"
+# Typed blanks (___, ---, ..., …) and spoken ones ("dash", "blank", खाली, रिक्त स्थान, ಖಾಲಿ).
+_BLANK_WORD = (r"(?:dash|blank|khaali|khali|डैश|ब्लैंक|खाली\s*स्थान|रिक्त\s*स्थान|खाली"
+               r"|ಖಾಲಿ\s*ಜಾಗ|ಖಾಲಿ)")
+_WORDCHAR = r"[\wऀ-෿]"
+_BLANK_RE = re.compile(
+    rf"_{{2,}}|-{{2,}}|\.{{3,}}|…+"
+    rf"|(?<!{_WORDCHAR}){_BLANK_WORD}(?:\s+{_BLANK_WORD})*(?!{_WORDCHAR})",
+    re.IGNORECASE)
+_FILL_PREFIX = re.compile(r"^\s*(fill\s+in\s+the\s+____s?|fill\s+in\s+the\s+blanks?|"
+                          r"____\s*भरो|रिक्त\s*स्थान\s*भरो)\s*[:\-]?\s*", re.IGNORECASE)
+
+
+def normalize_blanks(question: str) -> tuple[str, str]:
+    """(question with every blank written as ____, text to search the books with).
+
+    A child may type ___ or say "dash"/"blank"/"खाली"; speech recognition writes those
+    as words, which would otherwise be searched for and answered literally."""
+    q = _BLANK_RE.sub(BLANK, question)
+    q = re.sub(r"(?:\s*____\s*){2,}", f" {BLANK} ", q)
+    q = re.sub(r"\s+", " ", q).strip()
+    if BLANK not in q:
+        return question, question
+    search = _FILL_PREFIX.sub("", q)
+    search = re.sub(r"\s+", " ", search.replace(BLANK, " ")).strip()
+    return q, search or q
 WHY_HOW = re.compile(r"\b(why|how)\b|क्यों|कैसे|ಏಕೆ|ಯಾಕೆ|ಹೇಗೆ", re.IGNORECASE)
 MULTI_TOPIC_BAND = 0.05  # topics scoring within this of the best count as "equally relevant"
 
@@ -70,6 +97,8 @@ def decide(ask: Ask, hits: list[Hit], threshold: float | None = None,
         return Decision(HAIKU, "explain_more")
     if ask.subject == "kannada" or KANNADA.search(ask.question):
         return Decision(HAIKU, "kannada")
+    if ask.subject == "hindi" or DEVANAGARI.search(ask.question):
+        return Decision(HAIKU, "hindi")  # small local models are weak at Hindi too
     if similar_flagged:
         return Decision(HAIKU, "similar_flagged")
     book_hits = [h for h in hits if h.meta.get("kind") != "pattern"]
@@ -81,6 +110,11 @@ def decide(ask: Ask, hits: list[Hit], threshold: float | None = None,
                 for h in book_hits if h.score >= max(thr, top - MULTI_TOPIC_BAND)}
         if len(near) >= 2:
             return Decision(HAIKU, "multi_topic_why_how")
+    s = get_settings()
+    if s.answer_mode == "claude_only":
+        return Decision(HAIKU, "claude_only")
+    if top < s.local_min_score:
+        return Decision(HAIKU, "weak_match")
     return Decision(LOCAL, "default")
 
 
@@ -182,7 +216,8 @@ async def answer(ask: Ask) -> AsyncIterator[dict]:
             ask.subject = ask.subject or prev["subject"]
             previous = f"{prev['hint']}\n{prev['answer']}".strip()
 
-    query = question
+    question, query = normalize_blanks(question)
+    ask.question = question
     if ask.image:
         seen, u = await _transcribe(ask)
         usage_in += u.input_tokens

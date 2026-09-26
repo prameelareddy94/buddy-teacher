@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     data_dir: Path = Path("./data")
     low_score_threshold: float = 0.45
     top_k: int = 6
+    # "local_first": the local model answers strong book matches, Claude the rest.
+    # "claude_only": every question goes to Claude Haiku (~$0.002 each).
+    answer_mode: str = "local_first"
+    local_min_score: float = 0.55       # below this the local model isn't trusted
+    school_book_boost: float = 0.08     # her school's own books rank above NCERT
     # A fixed (verified) answer this similar to a new question is shown to the model
     # first; at verified_direct it is answered straight from the fix, no model call.
     verified_threshold: float = 0.80

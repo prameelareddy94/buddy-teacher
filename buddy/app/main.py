@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from buddy import fixes, logs, review
-from buddy.books import BOOKS, SUBJECTS
+from buddy.books import BOOKS, SUBJECTS, add_school_book, load_custom_books
 from buddy.config import get_settings
 from buddy.ingest.pdf import image_to_page
 from buddy.llm import ollama
@@ -57,6 +57,7 @@ async def review_scheduler() -> None:
 
 @asynccontextmanager
 async def lifespan(_app):
+    load_custom_books()
     s = get_settings()
     task = None
     if s.review_enabled and s.anthropic_api_key:
@@ -214,9 +215,91 @@ def get_log(limit: int = 200, _: str = Depends(need_parent)):
     return {"summary": summary(), "rows": recent(limit)}
 
 
+def _chunk_count(book_key: str) -> int:
+    got = store.get_collection().get(where={"$and": [{"book": book_key}, {"source": "ncert"}]},
+                                     include=[])
+    return len(got["ids"])
+
+
 @app.get("/api/books")
 def books(_: str = Depends(need_parent)):
-    return [{"key": b.key, "label": b.label, "title": b.title} for b in BOOKS.values()]
+    load_custom_books()
+    return [{"key": b.key, "label": b.label, "title": b.title, "subject": b.subject,
+             "grade": b.grade, "school": b.is_school, "chunks": _chunk_count(b.key)}
+            for b in BOOKS.values()]
+
+
+@app.post("/api/books")
+def create_book(subject: str = Form(...), name: str = Form(...), key: str = Form(""),
+                grade: int = Form(4), _: str = Depends(need_parent)):
+    try:
+        b = add_school_book(key or f"school-{subject}" + ("" if grade == 4 else f"-c{grade}"),
+                            subject, name.strip(), grade=grade)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"key": b.key, "label": b.label}
+
+
+@app.post("/api/books/{book_key}/hide")
+def hide_book(book_key: str, _: str = Depends(need_parent)):
+    """Take a book out of search (e.g. an NCERT book her school doesn't use)."""
+    if book_key not in BOOKS:
+        raise HTTPException(404, "No such book")
+    store.delete_where({"$and": [{"book": book_key}, {"source": "ncert"}]})
+    return {"ok": True}
+
+
+@app.post("/api/book-chapter")
+async def book_chapter(
+    files: list[UploadFile] = File(...),
+    book: str = Form(...),
+    chapter: int = Form(...),
+    _: str = Depends(need_parent),
+):
+    """Photos/PDF of one chapter of her school book: saved, then read by Claude in the
+    background (~$0.15, a few minutes). Progress shows under /api/jobs."""
+    from buddy.ingest.schoolbook import ingest_now, save_chapter_files
+
+    load_custom_books()
+    if book not in BOOKS:
+        raise HTTPException(400, "Unknown book")
+    if not get_settings().anthropic_api_key:
+        raise HTTPException(400, "ANTHROPIC_API_KEY is not set")
+    tmp = Path(tempfile.mkdtemp(prefix="buddy-ch-"))
+    try:
+        paths = []
+        for i, f in enumerate(files):
+            suffix = Path(f.filename or "").suffix.lower() or ".jpg"
+            if suffix not in (".pdf", ".jpg", ".jpeg", ".png", ".webp"):
+                raise HTTPException(400, f"{f.filename}: use JPEG/PNG photos or a PDF")
+            data = await f.read(MAX_UPLOAD * 4 + 1)
+            if len(data) > MAX_UPLOAD * 4:
+                raise HTTPException(413, f"{f.filename} is too big")
+            p = tmp / f"{i:03d}{suffix}"
+            p.write_bytes(data)
+            paths.append(p)
+        try:
+            pages = await asyncio.to_thread(save_chapter_files, book, chapter, paths)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    job_id = logs.add_job(kind="school_chapter", book=book, chapter=chapter,
+                          detail=f"{pages} pages uploaded")
+
+    def work():
+        try:
+            ingest_now(book, chapter, job_id=job_id)
+        except Exception:
+            log.exception("school chapter %s ch%s failed", book, chapter)
+
+    asyncio.get_running_loop().run_in_executor(None, work)
+    return {"job_id": job_id, "pages": pages}
+
+
+@app.get("/api/jobs")
+def jobs(_: str = Depends(need_parent)):
+    return logs.list_jobs()
 
 
 @app.get("/api/review")

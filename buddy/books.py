@@ -7,8 +7,13 @@ chapter; <code>dd.zip is the whole book). `text_mode` says how ingestion reads a
             font encodings whose text layer is garbage)
 Book keys: the Class 4 book uses the bare subject ("evs"); older classes add the
 class ("evs-c3", "english-c1"). Classes 1-2 have no EVS book in the NEP syllabus.
+
+School books (e.g. Orchids' own books) are added at runtime from photos or scans and
+kept in data/books.json. They are "school" books: search ranks them above NCERT.
 """
-from dataclasses import dataclass
+import json
+import re
+from dataclasses import asdict, dataclass
 
 CURRENT_GRADE = 4
 
@@ -25,14 +30,24 @@ class Book:
     text_mode: str
     ncert_code: str | None  # None = PDFs supplied by hand
     chapters: int | None    # None = unknown; found from files / by probing NCERT
+    custom_key: str | None = None   # school books only
+    name: str | None = None         # school books: label shown in citations
 
     @property
     def key(self) -> str:
+        if self.custom_key:
+            return self.custom_key
         return self.subject if self.grade == CURRENT_GRADE else f"{self.subject}-c{self.grade}"
+
+    @property
+    def is_school(self) -> bool:
+        return self.custom_key is not None
 
     @property
     def label(self) -> str:
         """Shown to the child in citations."""
+        if self.name:
+            return self.name
         name = SUBJECTS[self.subject]
         return name if self.grade == CURRENT_GRADE else f"{name} (Class {self.grade})"
 
@@ -62,9 +77,53 @@ _ALL = [
 ]
 
 BOOKS: dict[str, Book] = {b.key: b for b in _ALL}
+BUILTIN_KEYS = frozenset(BOOKS)
+
+
+def _custom_file():
+    from buddy.config import get_settings
+    return get_settings().data_dir / "books.json"
+
+
+def load_custom_books() -> None:
+    """(Re)load school books from data/books.json into BOOKS."""
+    for k in [k for k in BOOKS if k not in BUILTIN_KEYS]:
+        del BOOKS[k]
+    f = _custom_file()
+    if f.exists():
+        for d in json.loads(f.read_text()):
+            b = Book(**d)
+            BOOKS[b.key] = b
+
+
+def add_school_book(key: str, subject: str, name: str, grade: int = CURRENT_GRADE,
+                    title: str = "", language: str | None = None) -> Book:
+    """Register one of her school's own books (read from photos/scans)."""
+    load_custom_books()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,40}", key):
+        raise ValueError("Book key: lowercase letters, digits and dashes, e.g. orchids-evs")
+    if key in BUILTIN_KEYS:
+        raise ValueError(f"{key} is an NCERT book key; pick another, e.g. orchids-{subject}")
+    if subject not in SUBJECTS:
+        raise ValueError(f"subject must be one of {', '.join(SUBJECTS)}")
+    language = language or {"hindi": "Hindi", "kannada": "Kannada"}.get(subject, "English")
+    book = Book(subject, grade, title or name, language, "image", None, None,
+                custom_key=key, name=name)
+    BOOKS[key] = book
+    books = [asdict(b) for b in BOOKS.values() if b.is_school]
+    f = _custom_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(books, ensure_ascii=False, indent=2))
+    return book
+
+
+def school_book_keys() -> set[str]:
+    return {k for k, b in BOOKS.items() if b.is_school}
 
 
 def get_book(key: str) -> Book:
+    if key not in BOOKS:
+        load_custom_books()
     try:
         return BOOKS[key]
     except KeyError:

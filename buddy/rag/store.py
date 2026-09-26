@@ -125,13 +125,23 @@ def search(query: str, subject: str | None = None, k: int | None = None,
     if book:
         filters.append({"book": book})
     filters.append({"kind": {"$in": kinds}} if kinds else {"kind": {"$nin": SPECIAL_KINDS}})
+    from buddy.books import school_book_keys
+
+    school = school_book_keys() if not book else set()
     res = col.query(
         query_embeddings=get_embedder().embed([query]),
-        n_results=min(k, col.count()),
+        n_results=min(k * 2 if school else k, col.count()),
         where=_where(filters),
     )
-    return [Hit(i, d, m or {}, 1.0 - dist) for i, d, m, dist in
+    hits = [Hit(i, d, m or {}, 1.0 - dist) for i, d, m, dist in
             zip(res["ids"][0], res["documents"][0], res["metadatas"][0], res["distances"][0])]
+    if school:  # her school's own books first when they match about as well
+        boost = get_settings().school_book_boost
+        for h in hits:
+            if h.meta.get("book") in school:
+                h.score = min(1.0, h.score + boost)
+        hits.sort(key=lambda h: h.score, reverse=True)
+    return hits[:k]
 
 
 def get_by(where: dict, limit: int = 50) -> list[Hit]:

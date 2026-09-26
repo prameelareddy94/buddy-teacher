@@ -11,6 +11,36 @@
   </header>
 
   <section>
+    <h2>📚 Her school books</h2>
+    <p class="muted">If her school uses its own books (not NCERT), photograph each chapter's pages
+      in order and upload them here. Buddy reads them in a few minutes (about $0.15 a chapter)
+      and prefers them over NCERT. You can hide NCERT books she doesn't use.</p>
+    <form id="newBook">
+      <select name="subject" required>
+        <option value="evs">EVS</option><option value="english">English</option>
+        <option value="maths">Maths</option><option value="hindi">Hindi</option>
+        <option value="kannada">Kannada</option>
+      </select>
+      <input name="name" placeholder='Name in answers, e.g. "EVS book"' required style="min-width:220px">
+      <label>Class <input type="number" name="grade" value="4" min="1" max="4" style="width:60px"></label>
+      <button type="submit" class="secondary">Add book</button>
+      <span id="bookmsg"></span>
+    </form>
+    <form id="chapterUp" style="margin-top:10px">
+      <select name="book" id="schoolBookSel" required></select>
+      <label>Chapter <input type="number" name="chapter" min="1" value="1" style="width:70px" required></label>
+      <input type="file" name="files" multiple accept="image/*,.pdf" required>
+      <button type="submit">Upload chapter</button>
+      <span id="chmsg"></span>
+    </form>
+    <div class="cards" id="jobs"></div>
+    <table>
+      <thead><tr><th>Book</th><th>Key</th><th>Kind</th><th>Chunks in search</th><th></th></tr></thead>
+      <tbody id="bookRows"></tbody>
+    </table>
+  </section>
+
+  <section>
     <h2>Upload school material</h2>
     <form id="up">
       <input type="file" name="files" multiple accept=".pdf,image/*" required>
@@ -190,10 +220,69 @@ document.getElementById("up").onsubmit = async (e) => {
   if (r.ok) e.target.reset();
 };
 
-(async () => {
+async function loadBooks() {
   const r = await fetch("/api/books");
-  if (r.ok) BOOKS = await r.json();
-  loadLog(); loadReview();
+  if (!r.ok) return;
+  BOOKS = await r.json();
+  const sel = document.getElementById("schoolBookSel"); sel.innerHTML = "";
+  const school = BOOKS.filter(b => b.school);
+  if (!school.length) sel.appendChild(mk("option", { value: "" }, "Add a book first ↑"));
+  for (const b of school) sel.appendChild(mk("option", { value: b.key }, b.label));
+  const rows = document.getElementById("bookRows"); rows.innerHTML = "";
+  for (const b of BOOKS.filter(b => b.school || b.chunks)) {
+    const tr = mk("tr");
+    tr.append(td(`${b.label} – ${b.title}`), td(b.key), td(b.school ? "school book" : "NCERT"), td(b.chunks));
+    const act = td("");
+    if (b.chunks) {
+      const h = mk("button", { className: "ghost", type: "button" }, "Hide from search");
+      h.onclick = async () => {
+        if (!confirm(`Hide ${b.label} (${b.key}) from Buddy's search?`)) return;
+        await fetch(`/api/books/${b.key}/hide`, { method: "POST" }); loadBooks();
+      };
+      act.appendChild(h);
+    }
+    tr.appendChild(act); rows.appendChild(tr);
+  }
+}
+
+let jobTimer = null;
+async function loadJobs() {
+  const r = await fetch("/api/jobs");
+  if (!r.ok) return;
+  const jobs = await r.json();
+  const box = document.getElementById("jobs"); box.innerHTML = "";
+  for (const j of jobs.slice(0, 6)) {
+    const icon = { queued: "⏳", running: "📖", done: "✅", failed: "❌" }[j.status] || "";
+    box.appendChild(mk("div", { className: "card" },
+      `${icon} ${j.book} ch ${j.chapter}: ${j.status}${j.detail ? " – " + j.detail : ""}` +
+      (j.cost_usd ? ` · $${j.cost_usd.toFixed(3)}` : "")));
+  }
+  const busy = jobs.some(j => j.status === "queued" || j.status === "running");
+  clearTimeout(jobTimer);
+  if (busy) jobTimer = setTimeout(() => { loadJobs(); loadBooks(); }, 10000);
+}
+
+document.getElementById("newBook").onsubmit = async (e) => {
+  e.preventDefault();
+  const r = await fetch("/api/books", { method: "POST", body: new FormData(e.target) });
+  const j = await r.json();
+  document.getElementById("bookmsg").textContent = r.ok ? `Added ${j.label} (${j.key})` : (j.detail || "Failed");
+  if (r.ok) { e.target.reset(); loadBooks(); }
+};
+
+document.getElementById("chapterUp").onsubmit = async (e) => {
+  e.preventDefault();
+  const msg = document.getElementById("chmsg");
+  msg.textContent = "Uploading…";
+  const r = await fetch("/api/book-chapter", { method: "POST", body: new FormData(e.target) });
+  const j = await r.json();
+  msg.textContent = r.ok ? `${j.pages} pages uploaded; Buddy is reading them (a few minutes)` : (j.detail || "Failed");
+  if (r.ok) { e.target.files.value = ""; loadJobs(); }
+};
+
+(async () => {
+  await loadBooks();
+  loadLog(); loadReview(); loadJobs();
 })();
 </script>
 </body></html>

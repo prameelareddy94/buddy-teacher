@@ -42,6 +42,17 @@ CREATE TABLE IF NOT EXISTS fixes (
     chunk_id TEXT,
     run_id INTEGER
 );
+CREATE TABLE IF NOT EXISTS jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    kind TEXT NOT NULL,           -- school_chapter
+    book TEXT,
+    chapter INTEGER,
+    status TEXT NOT NULL,         -- queued | running | done | failed
+    detail TEXT,
+    cost_usd REAL DEFAULT 0,
+    finished REAL
+);
 CREATE TABLE IF NOT EXISTS review_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     started REAL NOT NULL,
@@ -170,3 +181,19 @@ def finish_run(run_id: int, **fields) -> None:
 
 def list_runs(limit: int = 20) -> list[dict]:
     return _rows("SELECT * FROM review_runs ORDER BY id DESC LIMIT ?", (limit,))
+
+
+# ---------- background jobs (school-book chapters) ----------
+
+def add_job(**fields) -> int:
+    fields.setdefault("ts", time.time())
+    fields.setdefault("status", "queued")
+    return _insert("jobs", fields)
+
+
+def update_job(job_id: int, **fields) -> None:
+    _update("jobs", job_id, fields)
+
+
+def list_jobs(limit: int = 30) -> list[dict]:
+    return _rows("SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,))

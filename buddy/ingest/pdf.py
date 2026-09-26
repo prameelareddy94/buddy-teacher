@@ -43,3 +43,25 @@ def load_upload(path: Path) -> list[Page]:
     if path.suffix.lower() == ".pdf":
         return load_pages(path, use_text=True)
     return [image_to_page(path.read_bytes(), 1)]
+
+
+def files_to_pdf(files: list[Path], dest: Path) -> int:
+    """Combine photos (JPEG/PNG/WebP) and PDFs, in the given order, into one PDF.
+    Used for chapters of her school books photographed on a phone. Returns page count."""
+    out = pymupdf.open()
+    for f in files:
+        if f.suffix.lower() == ".pdf":
+            with pymupdf.open(f) as src:
+                out.insert_pdf(src)
+        else:
+            with pymupdf.open(f) as img:
+                pdf_bytes = img.convert_to_pdf()
+            with pymupdf.open("pdf", pdf_bytes) as page_pdf:
+                out.insert_pdf(page_pdf)
+    if out.page_count == 0:
+        raise ValueError("no pages found in the uploaded files")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    n = out.page_count
+    out.save(dest, garbage=3, deflate=True)
+    out.close()
+    return n

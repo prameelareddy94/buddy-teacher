@@ -28,6 +28,21 @@ count isn't recorded, so `download <book> all` fetches chapters until one is mis
 The school's own worksheets, notes and test papers (PDF or photos) can be uploaded from
 the parent page. Buddy then answers and makes quizzes in the school's style.
 
+**If her school uses its own books** (many Orchids branches use in-house books alongside
+or instead of NCERT), add them from photos. Go to Parent view → 📚 Her school books:
+1. **Add book**, e.g. EVS, "EVS book".
+2. **Upload chapter:** photograph the chapter's pages in order, then upload them.
+3. Claude Sonnet 5 reads the chapter right away, taking a few minutes and costing about
+   $0.15 per chapter at the normal API price.
+4. School books rank above NCERT in search. **Hide from search** removes an NCERT book she
+   doesn't use.
+
+From the command line:
+`add-book orchids-evs --subject evs --name "EVS book"`, then
+`add-photos orchids-evs 3 ~/Pictures/ch3/*.jpg --sort --now`, and `remove evs`.
+iPhone photos must be JPEG: set Settings → Camera → Formats → Most Compatible, or export
+them as JPEG.
+
 ## How it works
 
 ```
@@ -50,6 +65,12 @@ the parent page. Buddy then answers and makes quizzes in the school's style.
 A fixed answer that closely matches a new question is used before any of this. Above
 `VERIFIED_DIRECT` similarity it's returned directly with no model call, so it's free.
 
+- **Fill in the blanks:** `___`, `...`, or a spoken "dash", "blank", "खाली (स्थान)" or
+  "रिक्त स्थान" become a real blank (`____`). The search ignores it, and Buddy answers with
+  the missing word and the whole sentence.
+- **Hindi and Kannada questions go to Claude Haiku**; small local models are weak in both.
+  With `ANSWER_MODE=claude_only`, every question does, at about $0.002 each. Otherwise the
+  local model answers only strong book matches (`LOCAL_MIN_SCORE`).
 - **Kid rules** (`buddy/kid_rules.py`): answer only from the retrieved passages; simple
   words for a 9-year-old; hint first (the answer sits behind a "Show answer" button); always
   cite; say "This is not in your book. Please ask your teacher!" when the book doesn't

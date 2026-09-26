@@ -84,8 +84,40 @@ def wait(client: anthropic.Anthropic, batch_id: str, poll_seconds: int = 30) -> 
         time.sleep(poll_seconds)
 
 
+def save_result(book_key: str, chapter: int, msg, source_id: str, batch: bool) -> dict:
+    """Save one processed chapter to data/processed and log its cost. Returns a report."""
+    cid = custom_id(book_key, chapter)
+    if msg.stop_reason != "end_turn":
+        return {"id": cid, "status": f"stop_reason={msg.stop_reason}"}
+    text = next(b.text for b in msg.content if b.type == "text")
+    data = json.loads(text)
+    u = msg.usage
+    report = {
+        "id": cid,
+        "status": "ok",
+        "book": book_key,  # e.g. "evs" (Class 4), "evs-c3", or a school book
+        "chapter": chapter,
+        "model": msg.model,
+        "batch_id": source_id if batch else None,
+        "mode": "batch" if batch else "direct",
+        "input_tokens": u.input_tokens,
+        "output_tokens": u.output_tokens,
+        "cost_usd": round(cost_usd(INGEST_MODEL, u.input_tokens, u.output_tokens,
+                                   batch=batch), 4),
+        "topics": len(data["topics"]),
+        "qa_pairs": sum(len(t["qa"]) for t in data["topics"]),
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    out = processed_path(book_key, chapter)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({"meta": report, "result": data}, ensure_ascii=False, indent=2))
+    with open(get_settings().cost_log, "a") as f:
+        f.write(json.dumps(report) + "\n")
+    return report
+
+
 def collect(client: anthropic.Anthropic, batch_id: str) -> list[dict]:
-    """Save each succeeded chapter to data/processed and log its cost."""
+    """Save each succeeded chapter of a batch."""
     s = get_settings()
     reports = []
     for res in client.messages.batches.results(batch_id):
@@ -94,40 +126,23 @@ def collect(client: anthropic.Anthropic, batch_id: str) -> list[dict]:
             detail = getattr(res.result, "error", None)
             reports.append({"id": res.custom_id, "status": res.result.type, "detail": str(detail)})
             continue
-        msg = res.result.message
-        if msg.stop_reason != "end_turn":
-            reports.append({"id": res.custom_id, "status": f"stop_reason={msg.stop_reason}"})
-            continue
-        text = next(b.text for b in msg.content if b.type == "text")
-        data = json.loads(text)
-        u = msg.usage
-        report = {
-            "id": res.custom_id,
-            "status": "ok",
-            "book": book_key,  # e.g. "evs" (Class 4) or "evs-c3"
-            "chapter": chapter,
-            "model": msg.model,
-            "batch_id": batch_id,
-            "input_tokens": u.input_tokens,
-            "output_tokens": u.output_tokens,
-            "cost_usd": round(cost_usd(INGEST_MODEL, u.input_tokens, u.output_tokens,
-                                       batch=True), 4),
-            "topics": len(data["topics"]),
-            "qa_pairs": sum(len(t["qa"]) for t in data["topics"]),
-            "at": datetime.now(timezone.utc).isoformat(),
-        }
-        out = processed_path(book_key, chapter)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps({"meta": report, "result": data}, ensure_ascii=False, indent=2))
-        with open(s.cost_log, "a") as f:
-            f.write(json.dumps(report) + "\n")
-        reports.append(report)
+        reports.append(save_result(book_key, chapter, res.result.message, batch_id, batch=True))
     state = s.batches_dir / f"{batch_id}.json"
     if state.exists():
         st = json.loads(state.read_text())
         st["collected"] = True
         state.write_text(json.dumps(st, indent=2))
     return reports
+
+
+def process_now(client: anthropic.Anthropic, book_key: str, chapter: int) -> dict:
+    """Process one chapter right away with the normal API (full price, a few minutes).
+    Used for school-book chapters uploaded from the parent page."""
+    params = chapter_params(get_book(book_key), chapter)
+    # Long output: stream so the HTTP request doesn't time out.
+    with client.messages.stream(**params) as stream:
+        msg = stream.get_final_message()
+    return save_result(book_key, chapter, msg, msg.id, batch=False)
 
 
 def cost_history() -> list[dict]:

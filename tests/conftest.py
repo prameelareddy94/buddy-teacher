@@ -16,10 +16,13 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("SESSION_SECRET", "x" * 32)
     monkeypatch.setenv("LOW_SCORE_THRESHOLD", "0.2")
     monkeypatch.setenv("REVIEW_ENABLED", "false")
+    monkeypatch.setenv("LOCAL_MIN_SCORE", "0.2")
     store.reset_cache()
+    from buddy import books
     for f in (config.get_settings, embed.get_embedder,
               claude.sync_client, claude.async_client):
         f.cache_clear()
+    books.load_custom_books()  # fresh data dir: no school books
     yield
     store.reset_cache()
     for f in (config.get_settings,):
