@@ -6,6 +6,7 @@ const preview = document.getElementById("preview");
 const sendBtn = document.getElementById("send");
 let subject = "";
 let busy = false;
+let via = "typed";   // "voice" when the question came from the 🎤
 
 function el(tag, cls, text) {
   const e = document.createElement(tag);
@@ -54,12 +55,18 @@ function buddyBubble(reveal = false) {
   const source = el("div", "source");
   const actions = el("div", "actions");
   const show = el("button", "secondary", "👀 Show answer"); show.type = "button"; show.hidden = true;
-  show.onclick = () => { answer.classList.remove("hidden"); show.hidden = true; scroll(); };
+  let last = { hint: "", answer: "", source: "" };
+  const answerParts = () => [last.answer, last.source ? "You can find this in " + last.source : ""];
+  show.onclick = () => {
+    answer.classList.remove("hidden"); show.hidden = true; scroll();
+    if (Voice.autoRead) Voice.speak(answerParts());
+  };
   actions.appendChild(show);
   m.append(typing, hint, answer, source, actions);
   chat.appendChild(m); scroll();
   return {
     update(p, streaming) {
+      last = p;
       typing.hidden = !!(p.hint || p.answer) || !streaming;
       if (p.hint) { hint.hidden = false; hint.textContent = "💡 " + p.hint; }
       answer.textContent = p.answer;
@@ -69,7 +76,16 @@ function buddyBubble(reveal = false) {
       source.textContent = p.source ? "📖 " + p.source : "";
       scroll();
     },
+    readAloud() {
+      const shown = !answer.classList.contains("hidden");
+      Voice.speak(shown ? [last.hint, ...answerParts()] : [last.hint || last.answer]);
+    },
     addActions(id) {
+      if (Voice.canSpeak) {
+        const say = el("button", "ghost thumb", "🔊"); say.type = "button"; say.title = "Read it to me";
+        say.onclick = () => this.readAloud();
+        actions.appendChild(say);
+      }
       if (!id) return;
       const b = el("button", "ghost", "🤔 Explain more"); b.type = "button";
       b.onclick = () => { b.disabled = true; ask({ explainMoreOf: id }); };
@@ -105,6 +121,8 @@ async function ask({ text = "", file = null, explainMoreOf = null } = {}) {
   const fd = new FormData();
   fd.append("question", text);
   fd.append("subject", subject);
+  fd.append("via", via);
+  via = "typed";
   if (explainMoreOf) fd.append("explain_more_of", explainMoreOf);
   if (file) fd.append("image", file);
   let raw = "";
@@ -126,7 +144,10 @@ async function ask({ text = "", file = null, explainMoreOf = null } = {}) {
         const ev = JSON.parse(line.slice(6));
         if (ev.type === "meta") raw = "";           // (re)started, e.g. after a local fallback
         else if (ev.type === "delta") { raw += ev.text; bubble.update(parseSections(raw), true); }
-        else if (ev.type === "done") { bubble.update(ev, false); bubble.addActions(ev.id); }
+        else if (ev.type === "done") {
+          bubble.update(ev, false); bubble.addActions(ev.id);
+          if (Voice.autoRead) bubble.readAloud();
+        }
       }
     }
   } catch (e) {
@@ -182,13 +203,50 @@ async function runQuiz(book, chapter) {
     const ans = el("div", "answer hidden", "✅ " + qq.answer);
     const src = el("div", "source", qq.source ? "📖 " + qq.source : "");
     const acts = el("div", "actions");
-    const hb = el("button", "ghost", "💡 Hint"); hb.type = "button"; hb.onclick = () => { hint.hidden = false; hb.remove(); scroll(); };
-    const ab = el("button", "secondary", "👀 Answer"); ab.type = "button"; ab.onclick = () => { ans.classList.remove("hidden"); ab.remove(); scroll(); };
+    const say = (t) => { if (Voice.autoRead) Voice.speak(t); };
+    const hb = el("button", "ghost", "💡 Hint"); hb.type = "button"; hb.onclick = () => { hint.hidden = false; hb.remove(); scroll(); say(qq.hint); };
+    const ab = el("button", "secondary", "👀 Answer"); ab.type = "button"; ab.onclick = () => { ans.classList.remove("hidden"); ab.remove(); scroll(); say(qq.answer); };
     const nb = el("button", "", "Next ➡️"); nb.type = "button"; nb.onclick = () => { nb.remove(); next(); };
     acts.append(hb, ab, nb);
     m.append(hint, ans, src, acts); chat.appendChild(m); scroll();
+    say(`Question ${i}. ${qq.question}`);
   };
   next();
+}
+
+// ---- Voice ----
+const mic = document.getElementById("mic");
+const readBtn = document.getElementById("readBtn");
+if (Voice.canListen) {
+  mic.hidden = false;
+  mic.onclick = () => {
+    if (Voice.listening()) { Voice.stopListening(); return; }
+    if (busy) return;
+    const before = q.value;
+    const started = Voice.listen(subject, (text) => {
+      q.value = text;
+    }, (finalText, err) => {
+      mic.classList.remove("on");
+      if (finalText) {
+        q.value = finalText;
+        via = "voice";
+        form.requestSubmit();
+      } else {
+        q.value = before;
+        if (err === "not-allowed" || err === "service-not-allowed") {
+          chat.appendChild(el("div", "msg buddy", "I can't hear you yet. Ask a grown-up to allow the microphone for this page 🎤"));
+          scroll();
+        }
+      }
+    });
+    if (started) mic.classList.add("on");
+  };
+}
+if (Voice.canSpeak) {
+  readBtn.hidden = false;
+  const paint = () => { readBtn.textContent = Voice.autoRead ? "🔊" : "🔇"; readBtn.title = Voice.autoRead ? "Reading answers aloud (tap to stop)" : "Tap to read answers aloud"; };
+  readBtn.onclick = () => { Voice.setAutoRead(!Voice.autoRead); paint(); };
+  paint();
 }
 
 loadMe();

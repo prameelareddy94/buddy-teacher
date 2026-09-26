@@ -147,6 +147,25 @@ path (`local`, `claude_haiku`, `claude_sonnet`, `verified`), 👍/👎, the reas
 answer, the citation, the latency and the Claude cost, plus totals per path. When the
 local model was overruled, hover over the answer to see what it had said.
 
+## Voice
+
+- **Talk instead of typing.** She taps the red 🎤, asks, and the question sends when she
+  stops talking. It listens in English, Hindi or Kannada based on the subject chip (English
+  under "All").
+- **Buddy reads aloud.** It reads the hint first, then the answer and where to find it
+  ("You can find this in EVS, Chapter 1, page 5") when she taps "Show answer". Quiz
+  questions are read too. 🔊 in the header turns auto-reading on or off, and each answer
+  has its own 🔊 button.
+- **It uses the browser's own speech engines,** so there's no extra server or cost. It
+  works in Safari on iPad/iPhone and in Chrome on Android. The microphone needs HTTPS,
+  which Tailscale Serve provides, or `localhost` when testing on the laptop. The browser
+  asks for microphone permission the first time. iPad and Chrome may send the audio to
+  Apple or Google to recognise it.
+- **Voices vary by device.** Kannada text-to-speech may be missing on some tablets; add
+  the voice in the tablet's settings (iPad: Settings → Accessibility → Spoken Content →
+  Voices).
+- The parent view marks spoken questions with 🎤.
+
 ## Fixing answers that didn't help
 
 1. **👍 / 👎 on every answer.** A 👎 flags the question. Until it's fixed, similar

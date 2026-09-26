@@ -141,6 +141,7 @@ async def ask(
     question: str = Form(""),
     subject: str = Form(""),
     explain_more_of: int | None = Form(None),
+    via: str = Form("typed"),
     image: UploadFile | None = File(None),
     _: str = Depends(need_kid),
 ):
@@ -153,7 +154,8 @@ async def ask(
     if not question.strip() and not img and not explain_more_of:
         raise HTTPException(400, "Ask a question or add a photo")
     a = Ask(question=question[:1000], subject=subject if subject in SUBJECTS else None,
-            image=img, image_type="image/jpeg", explain_more_of=explain_more_of)
+            image=img, image_type="image/jpeg", explain_more_of=explain_more_of,
+            via="voice" if via == "voice" else "typed")
 
     async def events():
         try:

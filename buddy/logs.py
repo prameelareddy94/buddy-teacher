@@ -66,6 +66,7 @@ QUESTION_COLUMNS = {
     "reviewed": "INTEGER DEFAULT 0",  # 0 = not yet, 1 = reviewed, 2 = don't auto-review
     "review_verdict": "TEXT",
     "fix_id": "INTEGER",
+    "via": "TEXT",                # typed | voice
 }
 
 

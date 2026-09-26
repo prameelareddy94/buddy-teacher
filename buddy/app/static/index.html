@@ -8,6 +8,7 @@
 <div class="app">
   <header>
     <h1>🦉 Buddy</h1>
+    <button class="ghost" id="readBtn" type="button" title="Read answers aloud" hidden>🔊</button>
     <button class="ghost" id="quizBtn">🎯 Quiz me</button>
     <a id="parentLink" href="/parent" hidden><button class="ghost">👪</button></a>
     <form method="post" action="/logout"><button class="ghost" title="Log out">🚪</button></form>
@@ -15,16 +16,18 @@
   <div class="subjects" id="subjects"></div>
   <div id="chat">
     <div class="msg buddy">Hi! I'm Buddy 🦉 Ask me anything from your school books.
-You can also take a 📷 photo of a question.</div>
+You can also take a 📷 photo of a question, or tap 🎤 and just ask me!</div>
   </div>
   <div id="preview"></div>
   <form class="ask" id="askForm">
     <label class="photo-btn" style="display:flex;align-items:center;justify-content:center;border-radius:14px;min-height:52px;color:#fff;cursor:pointer">
       📷<input type="file" id="photo" accept="image/*" capture="environment" hidden>
     </label>
-    <textarea id="q" rows="1" placeholder="Type your question…" enterkeyhint="send"></textarea>
+    <button class="mic-btn" id="mic" type="button" title="Tap and talk" hidden>🎤</button>
+    <textarea id="q" rows="1" placeholder="Type or tap 🎤 to talk…" enterkeyhint="send"></textarea>
     <button id="send" type="submit">Ask</button>
   </form>
 </div>
+<script src="/static/voice.js"></script>
 <script src="/static/app.js"></script>
 </body></html>

@@ -105,3 +105,21 @@ def test_quiz_from_book_bank():
     assert {q["question"] for q in qs} == {"What do plants need to make food?",
                                            "Trees give homes to birds. True or false?"}
     assert all(q["hint"] and q["answer"] and q["source"].startswith("EVS") for q in qs)
+
+
+def test_voice_question_is_logged(monkeypatch):
+    seed()
+
+    async def fake_local(system, prompt):
+        return {"hint": "Sun!", "answer": "Sunlight.", "confident": True, "pages": [5]}, {}
+
+    monkeypatch.setattr(router.ollama, "ask_local", fake_local)
+    c = TestClient(app)
+    login(c, "kid")
+    sse(c.post("/api/ask", data={"question": "what do plants need to make food",
+                                 "subject": "evs", "via": "voice"}))
+    sse(c.post("/api/ask", data={"question": "what do plants need to make food",
+                                 "subject": "evs", "via": "<script>"}))
+    from buddy.logs import recent
+    assert [r["via"] for r in recent()] == ["typed", "voice"]
+    assert "voice.js" in c.get("/").text

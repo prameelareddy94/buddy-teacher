@@ -156,7 +156,7 @@ async function loadLog() {
   for (const x of rows) {
     const tr = mk("tr");
     tr.appendChild(td(when(x.ts)));
-    tr.appendChild(td((x.had_image ? "📷 " : "") + x.question, "q"));
+    tr.appendChild(td((x.had_image ? "📷 " : "") + (x.via === "voice" ? "🎤 " : "") + x.question, "q"));
     const path = td(""); path.appendChild(mk("span", { className: "tag " + x.route }, x.route)); tr.appendChild(path);
     tr.appendChild(td(x.reason));
     tr.appendChild(td(x.top_score == null ? "" : x.top_score.toFixed(2)));

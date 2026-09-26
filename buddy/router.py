@@ -45,6 +45,7 @@ class Ask:
     image: bytes | None = None
     image_type: str = "image/jpeg"
     explain_more_of: int | None = None  # log id of the answer to expand
+    via: str = "typed"                  # typed | voice
 
 
 @dataclass
@@ -203,7 +204,7 @@ async def answer(ask: Ask) -> AsyncIterator[dict]:
         yield {"type": "delta", "text": text}
         qid = log_question(
             question=question, subject=ask.subject, route=VERIFIED, reason="verified_match",
-            model=f"fix #{m.get('fix_id')}", top_score=best.score, had_image=0,
+            model=f"fix #{m.get('fix_id')}", top_score=best.score, via=ask.via, had_image=0,
             latency_ms=int((time.monotonic() - t0) * 1000), input_tokens=0,
             output_tokens=0, cost_usd=0.0, **parsed)
         yield {"type": "done", "id": qid, "route": VERIFIED, "reason": "verified_match", **parsed}
@@ -228,9 +229,9 @@ async def answer(ask: Ask) -> AsyncIterator[dict]:
                 yield {"type": "delta", "text": text[i:i + 40]}
             qid = log_question(
                 question=question, subject=ask.subject, route=LOCAL, reason="default",
-                model=get_settings().ollama_model, top_score=top, had_image=0,
+                model=get_settings().ollama_model, top_score=top, via=ask.via, had_image=0,
                 latency_ms=int((time.monotonic() - t0) * 1000),
-                input_tokens=u["input_tokens"], output_tokens=u["output_tokens"],
+                input_tokens=u.get("input_tokens", 0), output_tokens=u.get("output_tokens", 0),
                 cost_usd=0.0, **parsed)
             yield {"type": "done", "id": qid, "route": LOCAL, "reason": "default", **parsed}
             return
@@ -277,7 +278,7 @@ async def answer(ask: Ask) -> AsyncIterator[dict]:
     parsed = {**parsed, "source": ""} if failed else finalize_source(parsed, hits)
     qid = log_question(
         question=question, subject=ask.subject, route=decision.route, reason=decision.reason,
-        model=model, top_score=top, had_image=int(bool(ask.image)),
+        model=model, top_score=top, via=ask.via, had_image=int(bool(ask.image)),
         latency_ms=int((time.monotonic() - t0) * 1000), input_tokens=usage_in,
         output_tokens=usage_out, cost_usd=round(cost, 6), local_attempt=local_attempt, **parsed)
     yield {"type": "done", "id": qid, "route": decision.route, "reason": decision.reason, **parsed}
