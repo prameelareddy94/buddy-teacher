@@ -171,3 +171,21 @@ def test_printed_pages_infers_unnumbered_pages():
            {"pdf_page": 5, "printed_page": 0}]
     assert printed_pages(ch2) == {1: 17, 2: 18, 3: 19, 4: 20, 5: 21}
     assert printed_pages([{"pdf_page": 1, "printed_page": 0}]) == {1: 1}
+
+
+def test_submit_skips_chapters_that_fail_to_download(monkeypatch, capsys):
+    from buddy.ingest import __main__ as cli
+
+    def fake_download(book, ch, *a, **k):
+        if ch == 3:
+            raise SystemExit("Could not download EVS chapter 3: ConnectTimeout")
+        return chapter_pdf_path(book.key, ch)
+
+    sent = {}
+    monkeypatch.setattr(cli, "download_chapter", fake_download)
+    monkeypatch.setattr(cli, "client", lambda: None)
+    monkeypatch.setattr(cli.batch, "submit", lambda c, items: sent.setdefault("items", items) and "msgbatch_x")
+    cli.main(["submit", "evs", "2-4", "--force"])
+    assert sent["items"] == [("evs", 2), ("evs", 4)]
+    out = capsys.readouterr().out
+    assert "skipped ch03" in out and "submit evs 3" in out

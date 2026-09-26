@@ -37,7 +37,7 @@ def _manual_help(book: Book, chapter: int, why: str) -> str:
     return "\n".join(lines)
 
 
-def download_chapter(book: Book, chapter: int, force: bool = False, attempts: int = 3,
+def download_chapter(book: Book, chapter: int, force: bool = False, attempts: int = 4,
                      missing_ok: bool = False) -> Path | None:
     """Download one chapter. With missing_ok, a 404 returns None (used to find the last chapter)."""
     dest = chapter_pdf_path(book.key, chapter)
@@ -51,7 +51,8 @@ def download_chapter(book: Book, chapter: int, force: bool = False, attempts: in
     tmp = dest.with_suffix(".part")
     # NCERT's server rejects some default client user agents.
     headers = {"User-Agent": "Mozilla/5.0 (BuddyTeacher personal study helper)"}
-    timeout = httpx.Timeout(120, connect=20)
+    # ncert.nic.in can take a minute to accept a connection from outside India.
+    timeout = httpx.Timeout(180, connect=90)
     err = ""
     for i in range(attempts):
         try:
@@ -70,8 +71,9 @@ def download_chapter(book: Book, chapter: int, force: bool = False, attempts: in
         except (httpx.TransportError, httpx.HTTPStatusError) as e:
             err = f"{type(e).__name__}: {e}"
             if i + 1 < attempts:
-                print(f"  download failed ({err}); retrying in {5 * (i + 1)}s…")
-                time.sleep(5 * (i + 1))
+                print(f"  {book.key} ch{chapter:02d}: download failed ({err}); "
+                      f"retrying in {15 * (i + 1)}s…")
+                time.sleep(15 * (i + 1))
     else:
         tmp.unlink(missing_ok=True)
         raise SystemExit(_manual_help(book, chapter, err))

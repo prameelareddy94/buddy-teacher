@@ -96,11 +96,27 @@ def gate(items: list[tuple[str, int]], force: bool) -> None:
 def cmd_submit(a):
     items = [(a.book, ch) for ch in parse_chapters(a.book, a.chapters)]
     gate(items, a.force)
+    ready, failed = [], []
     for s, ch in items:
-        download_chapter(get_book(s), ch)
-    bid = batch.submit(client(), items)
-    print(f"Submitted batch {bid} with {len(items)} chapter(s).")
+        try:
+            download_chapter(get_book(s), ch)
+            ready.append((s, ch))
+        except SystemExit as e:  # keep going; report at the end
+            failed.append((ch, str(e).splitlines()[0]))
+    for ch, why in failed:
+        print(f"  skipped ch{ch:02d}: {why}")
+    if not ready:
+        book = get_book(a.book)
+        sys.exit("Nothing downloaded. ncert.nic.in isn't reachable right now: try again later, "
+                 "or download the whole book in a browser and import it:\n"
+                 f"  https://ncert.nic.in/textbook/pdf/{book.ncert_code}dd.zip\n"
+                 f"  python -m buddy.ingest add-zip {book.key} ~/Downloads/{book.ncert_code}dd.zip")
+    bid = batch.submit(client(), ready)
+    print(f"Submitted batch {bid} with {len(ready)} chapter(s).")
     print(f"Collect later with: python -m buddy.ingest collect {bid} --wait")
+    if failed:
+        chs = ",".join(str(ch) for ch, _ in failed)
+        print(f"Re-run for the skipped ones later: python -m buddy.ingest submit {a.book} {chs}")
 
 
 def cmd_collect(a):
