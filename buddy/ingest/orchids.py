@@ -40,8 +40,21 @@ PART_NAMES = {"CS": "Coursebook", "RC": "Reading", "GV": "Grammar", "WS": "Writi
 SUBJECT_CODES = {"ENG", "HIN", "KAN", "MAT", "MATHS", "EVS", "SCI", "SST"}
 
 
-def subject_of(entry: dict) -> str | None:
-    return SUBJECT_NAMES.get(str(entry.get("subject_name", "")).strip().lower())
+def subject_of(entry: dict) -> tuple[str, str] | None:
+    """(subject key, the school's name for it). Known subjects map onto Buddy's
+    (Science -> evs); others (e.g. Horticulture) become new subjects."""
+    raw = str(entry.get("subject_name", "")).strip()
+    if not raw:
+        return None
+    if raw.isupper() and len(raw) <= 4:
+        label = raw                      # an acronym like IDP or EVS
+    else:
+        label = raw.title() if raw.isupper() or raw.islower() else raw
+    key = SUBJECT_NAMES.get(raw.lower())
+    if key:
+        return key, label
+    slug = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")[:30]
+    return (slug, label) if slug and slug[0].isalpha() else None
 
 
 def grade_of(entry: dict) -> int:
@@ -67,7 +80,7 @@ SUBJECT_KEY = {"english": "eng", "hindi": "hin", "kannada": "kan", "maths": "mat
                "evs": "evs"}
 
 
-def describe(book_name: str, subject: str) -> tuple[str, str]:
+def describe(book_name: str, subject: str, label: str | None = None) -> tuple[str, str]:
     """('orchids-eng-gv-t1', 'English Grammar (Term 1)') from e.g.
     'Textbook_Eng_GV_G4_T1_26-27' (word order in the names varies)."""
     kind, part, part_code, other = "Textbook", "", "", []
@@ -79,6 +92,9 @@ def describe(book_name: str, subject: str) -> tuple[str, str]:
             kind = "Workbook"
         elif u == "TEXTBOOK" or u == "BOOK" or u in SUBJECT_CODES:
             continue
+        elif len(p) >= 3 and (p.lower() == subject or
+                              (label or "").lower().replace(" ", "").startswith(p.lower())):
+            continue  # the subject's own code, e.g. "Hort" in a Horticulture book
         elif u in PART_NAMES:
             part, part_code = PART_NAMES[u], u.lower()
         elif re.fullmatch(r"G\d+", u) or re.fullmatch(r"\d{2}-\d{2}", p):
@@ -91,7 +107,7 @@ def describe(book_name: str, subject: str) -> tuple[str, str]:
             annual = True
         elif p:
             other.append(re.sub(r"[^a-z0-9]", "", p.lower()))
-    label = SUBJECT_LABEL[subject]
+    label = label or SUBJECT_LABEL.get(subject, subject.title())
     if kind == "Workbook":
         name = f"{label} Workbook" + (f" Vol {vol}" if vol else "")
         bits = ["wb", f"v{vol}" if vol else ""]
@@ -105,20 +121,21 @@ def describe(book_name: str, subject: str) -> tuple[str, str]:
         name += f" ({', '.join(extra)})"
     bits += [f"t{term}" if term else "", "annual" if annual else "",
              f"v{vol}" if vol and kind != "Workbook" else "", *other]
-    key = "-".join(["orchids", SUBJECT_KEY[subject], *[b for b in bits if b]])
+    key = "-".join(["orchids", SUBJECT_KEY.get(subject, subject), *[b for b in bits if b]])
     return key[:42].rstrip("-"), name
 
 
 def plan(listing: dict) -> list[dict]:
     rows = []
     for e in latest_per_title(listing.get("results", [])):
-        subject = subject_of(e)
-        if not subject:
-            rows.append({"entry": e, "skip": f"unknown subject {e.get('subject_name')!r}"})
+        found = subject_of(e)
+        if not found:
+            rows.append({"entry": e, "skip": f"no subject name for {e.get('book_name')!r}"})
             continue
-        key, name = describe(e.get("book_name") or e.get("title", ""), subject)
-        rows.append({"entry": e, "subject": subject, "grade": grade_of(e), "key": key,
-                     "name": name, "skip": None})
+        subject, label = found
+        key, name = describe(e.get("book_name") or e.get("title", ""), subject, label)
+        rows.append({"entry": e, "subject": subject, "label": label, "grade": grade_of(e),
+                     "key": key, "name": name, "skip": None})
     return rows
 
 
@@ -157,7 +174,7 @@ def import_one(row: dict, client=None, get=None, log=print) -> list[dict]:
     load_custom_books()
     if row["key"] not in BOOKS:
         add_school_book(row["key"], row["subject"], row["name"], grade=row["grade"],
-                        title=e.get("book_name", ""))
+                        title=e.get("book_name", ""), subject_label=row.get("label"))
     pdf = download(e, pdf_path(row["key"], e["id"]), get=get, log=log)
     with pymupdf.open(pdf) as doc:
         n = doc.page_count

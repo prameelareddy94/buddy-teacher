@@ -19,6 +19,8 @@ CURRENT_GRADE = 4
 
 SUBJECTS = {"evs": "EVS", "english": "English", "maths": "Maths", "hindi": "Hindi",
             "kannada": "Kannada"}
+# School books can bring extra subjects (e.g. "Horticulture"); they are added at load time.
+BUILTIN_SUBJECTS = dict(SUBJECTS)
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,7 @@ class Book:
     chapters: int | None    # None = unknown; found from files / by probing NCERT
     custom_key: str | None = None   # school books only
     name: str | None = None         # school books: label shown in citations
+    subject_label: str | None = None  # school books with a subject Buddy doesn't know yet
 
     @property
     def key(self) -> str:
@@ -89,15 +92,20 @@ def load_custom_books() -> None:
     """(Re)load school books from data/books.json into BOOKS."""
     for k in [k for k in BOOKS if k not in BUILTIN_KEYS]:
         del BOOKS[k]
+    SUBJECTS.clear()
+    SUBJECTS.update(BUILTIN_SUBJECTS)
     f = _custom_file()
     if f.exists():
         for d in json.loads(f.read_text()):
             b = Book(**d)
             BOOKS[b.key] = b
+            if b.subject not in SUBJECTS:
+                SUBJECTS[b.subject] = b.subject_label or b.subject.title()
 
 
 def add_school_book(key: str, subject: str, name: str, grade: int = CURRENT_GRADE,
-                    title: str = "", language: str | None = None) -> Book:
+                    title: str = "", language: str | None = None,
+                    subject_label: str | None = None) -> Book:
     """Register one of her school's own books (read from photos/scans)."""
     load_custom_books()
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,40}", key):
@@ -105,10 +113,15 @@ def add_school_book(key: str, subject: str, name: str, grade: int = CURRENT_GRAD
     if key in BUILTIN_KEYS:
         raise ValueError(f"{key} is an NCERT book key; pick another, e.g. orchids-{subject}")
     if subject not in SUBJECTS:
-        raise ValueError(f"subject must be one of {', '.join(SUBJECTS)}")
+        # A new subject from her school (e.g. horticulture): needs a display name.
+        if not subject_label or not re.fullmatch(r"[a-z][a-z0-9-]{1,30}", subject):
+            raise ValueError(f"subject must be one of {', '.join(SUBJECTS)}, or a new "
+                             "lowercase subject key with a subject label")
+        SUBJECTS[subject] = subject_label
     language = language or {"hindi": "Hindi", "kannada": "Kannada"}.get(subject, "English")
     book = Book(subject, grade, title or name, language, "image", None, None,
-                custom_key=key, name=name)
+                custom_key=key, name=name,
+                subject_label=subject_label if subject not in BUILTIN_SUBJECTS else None)
     BOOKS[key] = book
     books = [asdict(b) for b in BOOKS.values() if b.is_school]
     f = _custom_file()

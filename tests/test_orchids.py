@@ -41,8 +41,9 @@ def test_plan_keeps_newest_copy_and_names_books():
         "orchids-eng-cs-annual": (1745, "English Coursebook (Annual)"),
         "orchids-eng-rc-t1": (1455, "English Reading (Term 1)"),
         "orchids-eng-gv-t1": (915, "English Grammar (Term 1)"),
+        "orchids-art-tb": (5, "Art Textbook"),  # a subject Buddy didn't know: added
     }
-    assert [r["skip"] for r in rows if r["skip"]] == ["unknown subject 'Art'"]
+    assert not [r for r in rows if r["skip"]]
 
 
 def book_pdf(n_pages):
@@ -81,7 +82,7 @@ def test_cli_plan_then_submit_all(tmp_path, monkeypatch, capsys):
     f.write_text(json.dumps(LISTING))
     cli.main(["import-orchids", str(f)])
     out = capsys.readouterr().out
-    assert "orchids-eng-cs-annual" in out and "5 books" in out and "--go" in out
+    assert "orchids-eng-cs-annual" in out and "6 books" in out and "--go" in out
 
     books.add_school_book("orchids-eng-gv-t1", "english", "English Grammar (Term 1)")
     for ch in (1, 2):
@@ -98,3 +99,33 @@ def test_cli_plan_then_submit_all(tmp_path, monkeypatch, capsys):
     assert "1 chapters, 3 pages" in capsys.readouterr().out and not sent
     cli.main(["submit-all", "--yes", "--force"])
     assert sent["i"] == [("orchids-eng-gv-t1", 2)]
+
+
+def test_new_school_subjects_become_subjects(tmp_path, capsys):
+    from buddy.books import SUBJECTS
+    from buddy.ingest import __main__ as cli
+
+    hort = {"results": [entry(70, "Textbook_Hort_G4_Annual Book_26-27", 10, "2026-07-01",
+                              subject="Horticulture"),
+                        entry(71, "Textbook_IDP_G4_T1_26-27", 10, "2026-07-01", subject="IDP"),
+                        entry(72, "Textbook_Sci_G4_T1_26-27", 10, "2026-07-01",
+                              subject="Science")]}
+    rows = {r["key"]: r for r in orchids.plan(hort)}
+    assert rows["orchids-horticulture-tb-annual"]["name"] == "Horticulture Textbook (Annual)"
+    assert rows["orchids-idp-tb-t1"]["name"] == "IDP Textbook (Term 1)"
+    assert rows["orchids-evs-tb-t1"]["name"] == "Science Textbook (Term 1)"  # maps onto EVS
+
+    haiku = FakeHaiku([{"number": 1, "title": "Soil", "start_page": 1}])
+    orchids.import_one(rows["orchids-horticulture-tb-annual"], client=haiku,
+                       get=lambda url: book_pdf(2), log=lambda *a: None)
+    assert SUBJECTS["horticulture"] == "Horticulture"
+    books.load_custom_books()  # survives a reload (server restart)
+    assert SUBJECTS["horticulture"] == "Horticulture"
+
+    # several listing files in one go
+    a, b = tmp_path / "english.json", tmp_path / "hort.json"
+    a.write_text(json.dumps(LISTING))
+    b.write_text(json.dumps(hort))
+    cli.main(["import-orchids", str(a), str(b)])
+    out = capsys.readouterr().out
+    assert "9 books" in out and "orchids-idp-tb-t1" in out
