@@ -19,6 +19,9 @@ from pathlib import Path
 import httpx
 import pymupdf
 
+# Some school PDFs embed fonts MuPDF can't parse; pages still render, so don't print it.
+pymupdf.TOOLS.mupdf_display_errors(False)
+
 from buddy.books import get_book
 from buddy.config import ESCALATION_MODEL, cost_usd, get_settings
 from buddy.ingest.download import chapter_pdf_path
@@ -142,6 +145,12 @@ def detect_chapters(pages: list, client=None, log=print) -> tuple[list[dict], fl
     for start in range(0, len(pages), PAGES_PER_CALL):
         part = pages[start:start + PAGES_PER_CALL]
         content: list[dict] = []
+        if start and found:
+            last = max(found.values(), key=lambda c: c["start_page"])
+            content.append({"type": "text", "text":
+                            f"(Earlier pages: chapter {last['number']} \"{last['title']}\" "
+                            f"started on page {last['start_page']}. Don't list it again if it "
+                            "simply continues here.)"})
         for i, p in enumerate(part, start + 1):
             content.append({"type": "text", "text": f"page {i}"})
             data = p if isinstance(p, str) else _thumb_b64(p)
@@ -166,7 +175,17 @@ def detect_chapters(pages: list, client=None, log=print) -> tuple[list[dict], fl
         log(f"  looked at pages {start + 1}-{start + len(part)} "
             f"({data['subject'] or 'subject unknown'})")
     chapters = sorted(found.values(), key=lambda c: c["start_page"])
-    return chapters, cost
+    # The same chapter seen again at a batch boundary ("Types of Income" at 87 and 91).
+    merged: list[dict] = []
+    for ch in chapters:
+        if merged and _norm(ch["title"]) and _norm(ch["title"]) == _norm(merged[-1]["title"]):
+            continue
+        merged.append(ch)
+    return merged, cost
+
+
+def _norm(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
 
 
 def parse_split(spec: str) -> list[dict]:

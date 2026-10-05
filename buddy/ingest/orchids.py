@@ -86,9 +86,27 @@ def describe(book_name: str, subject: str, label: str | None = None) -> tuple[st
     kind, part, part_code, other = "Textbook", "", "", []
     term = vol = None
     annual = False
+    subject_words = {w for w in re.split(r"[^a-z0-9]+", f"{subject} {label or ''}".lower()) if w}
+    pending = None  # "VOL"/"TERM" waiting for its number
     for p in re.split(r"[_\s]+", book_name.strip()):
         u = p.upper()
-        if u == "WORKBOOK":
+        if pending and p.isdigit():
+            if pending == "T":
+                term = p
+            else:
+                vol = p
+            pending = None
+            continue
+        pending = None
+        if u in ("VOL", "VOLUME"):
+            pending = "V"
+        elif u == "TERM":
+            pending = "T"
+        elif u in ("AY", "SESSION") or re.fullmatch(r"\(?\d{1,2}\)?|\(\d+\)", p) or not p:
+            continue  # "AY 26-27", "(1)" copy markers
+        elif p.lower() in subject_words or p.lower() == subject_code(subject):
+            continue  # "Financial", "Literacy" in a Financial Literacy book
+        elif u == "WORKBOOK":
             kind = "Workbook"
         elif u == "TEXTBOOK" or u == "BOOK" or u in SUBJECT_CODES:
             continue
@@ -121,11 +139,25 @@ def describe(book_name: str, subject: str, label: str | None = None) -> tuple[st
         name += f" ({', '.join(extra)})"
     bits += [f"t{term}" if term else "", "annual" if annual else "",
              f"v{vol}" if vol and kind != "Workbook" else "", *other]
-    key = "-".join(["orchids", SUBJECT_KEY.get(subject, subject), *[b for b in bits if b]])
-    return key[:42].rstrip("-"), name
+    key = "-".join(["orchids", subject_code(subject), *[b for b in bits if b]])
+    return key[:41].rstrip("-"), name
 
 
-def plan(listing: dict) -> list[dict]:
+def subject_code(subject: str) -> str:
+    """Short subject part of book keys: eng, hin, maths, fl (financial-literacy), hort…"""
+    if subject in SUBJECT_KEY:
+        return SUBJECT_KEY[subject]
+    words = subject.split("-")
+    if len(words) > 1:
+        return "".join(w[0] for w in words if w)
+    return subject[:12]
+
+
+def plan(listing: dict, used: dict | None = None) -> list[dict]:
+    """One row per book title. `used` (title -> key) keeps keys unique across listings."""
+    load_custom_books()
+    existing = {b.title: b for b in BOOKS.values() if b.is_school}
+    used = used if used is not None else {}
     rows = []
     for e in latest_per_title(listing.get("results", [])):
         found = subject_of(e)
@@ -133,7 +165,16 @@ def plan(listing: dict) -> list[dict]:
             rows.append({"entry": e, "skip": f"no subject name for {e.get('book_name')!r}"})
             continue
         subject, label = found
-        key, name = describe(e.get("book_name") or e.get("title", ""), subject, label)
+        title = e.get("book_name") or e.get("title", "")
+        key, name = describe(title, subject, label)
+        if title in existing:  # imported before (maybe under an older key): keep it
+            key, name = existing[title].key, existing[title].label
+        elif key in used.values():
+            n = 2
+            while f"{key[:38]}-{n}" in used.values():
+                n += 1
+            key = f"{key[:38]}-{n}"
+        used[title] = key
         rows.append({"entry": e, "subject": subject, "label": label, "grade": grade_of(e),
                      "key": key, "name": name, "skip": None})
     return rows

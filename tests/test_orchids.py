@@ -129,3 +129,59 @@ def test_new_school_subjects_become_subjects(tmp_path, capsys):
     cli.main(["import-orchids", str(a), str(b)])
     out = capsys.readouterr().out
     assert "9 books" in out and "orchids-idp-tb-t1" in out
+
+
+def test_long_subject_keys_are_short_and_valid():
+    import re
+
+    fl = {"results": [
+        entry(80, "Financial_Literacy_G4_V1_AY 26-27 (1)", 10, "2026-07-01",
+              subject="Financial Literacy"),
+        entry(81, "Financial_Literacy_Textbook_G4_Vol_2_AY 26-27", 10, "2026-07-01",
+              subject="Financial Literacy")]}
+    rows = orchids.plan(fl)
+    keys = [r["key"] for r in rows]
+    assert keys == ["orchids-fl-tb-v1", "orchids-fl-tb-v2"]
+    assert all(re.fullmatch(r"[a-z0-9][a-z0-9-]{1,40}", k) for k in keys)
+
+
+def test_previously_imported_title_keeps_its_key():
+    books.add_school_book("orchids-old-key", "english", "English Grammar (Term 1)",
+                          title="Textbook_Eng_GV_G4_T1_26-27")
+    row = next(r for r in orchids.plan(LISTING) if r["entry"]["id"] == 915)
+    assert row["key"] == "orchids-old-key"
+
+
+def test_same_chapter_across_batches_is_merged():
+    from buddy.ingest import ebook
+
+    class TwoCalls(FakeHaiku):
+        def create(self, **params):
+            n = sum(1 for b in params["messages"][0]["content"] if b["type"] == "image")
+            self.chapters = ([{"number": 6, "title": "Types of Income", "start_page": 87}]
+                             if n == 90 else
+                             [{"number": 7, "title": "Types of income", "start_page": 91}])
+            return super().create(**params)
+
+    chapters, _ = ebook.detect_chapters(["x"] * 102, client=TwoCalls([]), log=lambda *a: None)
+    assert [c["start_page"] for c in chapters] == [87]
+
+
+def test_one_failing_book_does_not_stop_the_rest(tmp_path, monkeypatch, capsys):
+    from buddy.ingest import __main__ as cli
+
+    f = tmp_path / "english.json"
+    f.write_text(json.dumps(LISTING))
+    done = []
+
+    def fake_import(row, **kw):
+        if row["key"] == "orchids-eng-cs-annual":
+            raise ValueError("boom")
+        done.append(row["key"])
+        return []
+
+    monkeypatch.setattr(orchids, "import_one", fake_import)
+    cli.main(["import-orchids", str(f), "--go"])
+    out = capsys.readouterr().out
+    assert "FAILED: boom" in out and "--only orchids-eng-cs-annual" in out
+    assert len(done) == 5

@@ -195,9 +195,9 @@ def cmd_fetch_ebook(a):
 def cmd_import_orchids(a):
     from buddy.ingest import orchids
 
-    rows = []
+    rows, used = [], {}
     for f in a.listing:
-        rows += orchids.plan(orchids.load_listing(Path(f)))
+        rows += orchids.plan(orchids.load_listing(Path(f)), used)
     if a.only:
         rows = [r for r in rows if r.get("key") in a.only]
     total = sum(r["entry"].get("file_size") or 0 for r in rows if not r["skip"])
@@ -214,17 +214,22 @@ def cmd_import_orchids(a):
         print("Nothing downloaded yet. Re-run with --go to download and split into chapters "
               "(chapter finding costs about $0.05 a book).")
         return
+    failed = []
     for r in rows:
         if r["skip"]:
             continue
         print(f"{r['name']} ({r['key']}):")
         try:
             chapters = orchids.import_one(r)
-        except SystemExit as e:
+        except (SystemExit, Exception) as e:  # one bad book shouldn't stop the rest
             print(f"  FAILED: {e}")
+            failed.append(r["key"])
             continue
         for c in chapters:
             print(f"  ch{c['chapter']:02d}  pages {c['pages']:>9}  {c['title']}")
+    if failed:
+        print(f"Failed: {', '.join(failed)}. Fix the cause and re-run with --go "
+              f"--only {' '.join(failed)} (finished books are skipped quickly).")
     print("Check the chapter tables. To fix one book's split, edit "
           "data/raw/<book>/ebook-<id>.chapters.json and re-run with --go --only <book>.")
     print("Then: python -m buddy.ingest submit-all   (batch, half price)")
