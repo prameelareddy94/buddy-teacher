@@ -19,6 +19,10 @@ Her school's own books (e.g. Orchids), from phone photos:
   python -m buddy.ingest add-book orchids-evs --subject evs --name "EVS (school book)"
   python -m buddy.ingest add-photos orchids-evs 3 ~/Pictures/evs-ch3/*.jpg --now
   python -m buddy.ingest remove evs          # take a book out of search (e.g. NCERT EVS)
+
+Her school's e-books (page images by e-book id), whole book at once:
+  python -m buddy.ingest fetch-ebook orchids-evs 1749
+  python -m buddy.ingest submit orchids-evs all   # then collect as usual
 """
 import argparse
 import sys
@@ -161,6 +165,28 @@ def cmd_add_photos(a):
         print(f"  Process it with: python -m buddy.ingest run {a.book} {a.chapter} [--now]")
 
 
+def cmd_fetch_ebook(a):
+    from buddy.ingest.ebook import PAGE_URL, import_ebook
+
+    if a.split and len(a.ebook_ids) > 1:
+        sys.exit("--split works with one e-book id at a time")
+    book = get_book(a.book)
+    if not book.is_school:
+        sys.exit(f"{a.book} is an NCERT book. Add a school book first, e.g.\n"
+                 f"  python -m buddy.ingest add-book orchids-{book.subject} "
+                 f"--subject {book.subject} --name \"{book.label} book\"")
+    taken: set[int] = set()
+    for eid in a.ebook_ids:
+        rows = import_ebook(a.book, eid, split=a.split, url_template=a.url or PAGE_URL,
+                            taken=taken)
+        print(f"E-book {eid} -> {len(rows)} chapters:")
+        for r in rows:
+            print(f"  ch{r['chapter']:02d}  pages {r['pages']:>9}  {r['title']}")
+    print("Check the split above (the page images are in data/raw/"
+          f"{a.book}/ebooks/). If it's wrong, re-run with --split \"1:5,2:17,...\".")
+    print(f"Then: python -m buddy.ingest submit {a.book} all   (batch, half price)")
+
+
 def cmd_remove(a):
     from buddy.rag import store
 
@@ -269,6 +295,14 @@ def main(argv=None):
     sp.add_argument("--now", action="store_true", help="read and index it right away")
     sp.add_argument("--sort", action="store_true", help="order files by name")
     sp.set_defaults(fn=cmd_add_photos)
+    sp = sub.add_parser("fetch-ebook", help="download a school e-book's pages and split "
+                                            "them into chapters")
+    sp.add_argument("book", help="a school book key (add-book first), e.g. orchids-evs")
+    sp.add_argument("ebook_ids", nargs="+", help="e-book id(s), e.g. 1749")
+    sp.add_argument("--split", help='chapter start pages, e.g. "1:5,2:17,3:30" '
+                                    "(skips automatic detection)")
+    sp.add_argument("--url", help="page URL template with {ebook} and {page}")
+    sp.set_defaults(fn=cmd_fetch_ebook)
     sp = sub.add_parser("remove", help="take a book out of search")
     sp.add_argument("book")
     sp.set_defaults(fn=cmd_remove)

@@ -43,6 +43,20 @@ From the command line:
 iPhone photos must be JPEG: set Settings → Camera → Formats → Most Compatible, or export
 them as JPEG.
 
+**School e-books** (page images on the school's content server, by e-book id) import a
+whole book at once, from a computer that can open the page links:
+```bash
+python -m buddy.ingest add-book orchids-evs --subject evs --name "EVS book"
+python -m buddy.ingest fetch-ebook orchids-evs 1749        # several ids: 1749 1750 …
+python -m buddy.ingest submit orchids-evs all              # batch, half price; then collect
+```
+`fetch-ebook` downloads `page_1.png`, `page_2.png` … until a page doesn't exist. It's
+polite and resumable, and saves the images to `data/raw/<book>/ebooks/<id>/`. It then has
+Claude Haiku find where each chapter starts (about $0.05 a book) and writes `chNN.pdf` per
+chapter. If the split is wrong, check the printed table and re-run with
+`--split "1:5,2:17,3:30"` (chapter:start page). Use this only for books she is enrolled
+for, and keep Buddy private.
+
 ## How it works
 
 ```
