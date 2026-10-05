@@ -50,9 +50,11 @@ returns for a subject's e-books (the response with `"results": [...]`) as a file
 python -m buddy.ingest import-orchids english.json          # plan: which books, keys, sizes
 python -m buddy.ingest import-orchids english.json --go     # download PDFs + split chapters
 python -m buddy.ingest submit-all                           # estimate; add --yes to submit
-python -m buddy.ingest collect <batch_id> --wait
+python -m buddy.ingest collect-all --wait                   # collects every waiting batch
 ```
-Many titles are uploaded several times (per zone or volume), so only the newest copy of
+Big submissions are split into several batches automatically, because the Batch API takes
+at most 256 MB per batch. `submit-all` never sends a chapter that's already waiting in a
+batch. Many titles are uploaded several times (per zone or volume), so only the newest copy of
 each title is kept. Each title becomes its own school book, e.g. `orchids-eng-gv-t1` →
 "English Grammar (Term 1)", and answers cite that book. Chapters are found automatically
 (about $0.05 a book). The split is saved next to the PDF as `*.chapters.json`; edit it and

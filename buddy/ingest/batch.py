@@ -55,22 +55,57 @@ def count_input_tokens(client: anthropic.Anthropic, params: dict) -> int:
     return client.messages.count_tokens(**p).input_tokens
 
 
-def submit(client: anthropic.Anthropic, items: list[tuple[str, int]]) -> str:
-    requests = []
-    for book_key, chapter in items:
-        params = chapter_params(get_book(book_key), chapter)
-        requests.append(Request(custom_id=custom_id(book_key, chapter),
-                                params=MessageCreateParamsNonStreaming(**params)))
+# The Batch API takes at most 256 MB per batch; page images make chapters a few MB each.
+MAX_BATCH_BYTES = 200 * 1024 * 1024
+
+
+def _create(client: anthropic.Anthropic, requests: list, ids: list[str]) -> str:
     batch = client.messages.batches.create(requests=requests)
     s = get_settings()
     s.batches_dir.mkdir(parents=True, exist_ok=True)
     (s.batches_dir / f"{batch.id}.json").write_text(json.dumps({
         "batch_id": batch.id,
-        "items": [custom_id(*i) for i in items],
+        "items": ids,
         "submitted_at": datetime.now(timezone.utc).isoformat(),
         "collected": False,
     }, indent=2))
     return batch.id
+
+
+def submit(client: anthropic.Anthropic, items: list[tuple[str, int]],
+           max_bytes: int = MAX_BATCH_BYTES, log=print) -> list[str]:
+    """Submit chapters, as several batches when they don't fit in one. Builds and sends
+    one batch at a time so the page images of hundreds of chapters aren't all in memory."""
+    batch_ids: list[str] = []
+    requests, ids, size = [], [], 0
+    for book_key, chapter in items:
+        params = chapter_params(get_book(book_key), chapter)
+        n = len(json.dumps(params)) + 512
+        if n > max_bytes:
+            log(f"  skipped {custom_id(book_key, chapter)}: too big for one request "
+                f"({n / 1e6:.0f} MB); split that chapter into smaller ones")
+            continue
+        if requests and size + n > max_bytes:
+            batch_ids.append(_create(client, requests, ids))
+            log(f"  sent batch {batch_ids[-1]} ({len(ids)} chapters, {size / 1e6:.0f} MB)")
+            requests, ids, size = [], [], 0
+        requests.append(Request(custom_id=custom_id(book_key, chapter),
+                                params=MessageCreateParamsNonStreaming(**params)))
+        ids.append(custom_id(book_key, chapter))
+        size += n
+    if requests:
+        batch_ids.append(_create(client, requests, ids))
+        log(f"  sent batch {batch_ids[-1]} ({len(ids)} chapters, {size / 1e6:.0f} MB)")
+    return batch_ids
+
+
+def pending_batches() -> list[dict]:
+    """Batches submitted from this computer and not collected yet."""
+    d = get_settings().batches_dir
+    if not d.exists():
+        return []
+    out = [json.loads(p.read_text()) for p in sorted(d.glob("*.json"))]
+    return [b for b in out if not b.get("collected")]
 
 
 def wait(client: anthropic.Anthropic, batch_id: str, poll_seconds: int = 30) -> None:

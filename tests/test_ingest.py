@@ -184,7 +184,7 @@ def test_submit_skips_chapters_that_fail_to_download(monkeypatch, capsys):
     sent = {}
     monkeypatch.setattr(cli, "download_chapter", fake_download)
     monkeypatch.setattr(cli, "client", lambda: None)
-    monkeypatch.setattr(cli.batch, "submit", lambda c, items: sent.setdefault("items", items) and "msgbatch_x")
+    monkeypatch.setattr(cli.batch, "submit", lambda c, items: sent.setdefault("items", items) and ["msgbatch_x"])
     cli.main(["submit", "evs", "2-4", "--force"])
     assert sent["items"] == [("evs", 2), ("evs", 4)]
     out = capsys.readouterr().out

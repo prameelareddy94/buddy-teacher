@@ -94,7 +94,7 @@ def test_cli_plan_then_submit_all(tmp_path, monkeypatch, capsys):
     done.write_text("{}")
     sent = {}
     monkeypatch.setattr(cli, "client", lambda: None)
-    monkeypatch.setattr(cli.batch, "submit", lambda c, items: sent.setdefault("i", items) and "b1")
+    monkeypatch.setattr(cli.batch, "submit", lambda c, items: sent.setdefault("i", items) and ["b1"])
     cli.main(["submit-all"])
     assert "1 chapters, 3 pages" in capsys.readouterr().out and not sent
     cli.main(["submit-all", "--yes", "--force"])
@@ -185,3 +185,76 @@ def test_one_failing_book_does_not_stop_the_rest(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "FAILED: boom" in out and "--only orchids-eng-cs-annual" in out
     assert len(done) == 5
+
+
+class FakeBatches:
+    def __init__(self):
+        self.created = []
+        self.messages = self
+        self.batches = self
+
+    def create(self, requests):
+        self.created.append(requests)
+        from types import SimpleNamespace
+        return SimpleNamespace(id=f"msgbatch_{len(self.created)}")
+
+
+def _chapters(key, n, pages=2):
+    books.add_school_book(key, "english", "English Grammar (Term 1)")
+    for ch in range(1, n + 1):
+        p = chapter_pdf_path(key, ch)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(book_pdf(pages))
+
+
+def test_large_submissions_are_split_into_several_batches():
+    from buddy.ingest import batch
+
+    _chapters("orchids-eng-gv-t1", 5)
+    one = len(json.dumps(batch.chapter_params(books.BOOKS["orchids-eng-gv-t1"], 1)))
+    fake = FakeBatches()
+    ids = batch.submit(fake, [("orchids-eng-gv-t1", c) for c in range(1, 6)],
+                       max_bytes=int(one * 2.5), log=lambda *a: None)
+    assert ids == ["msgbatch_1", "msgbatch_2", "msgbatch_3"]
+    assert [len(r) for r in fake.created] == [2, 2, 1]
+    pending = batch.pending_batches()
+    assert [p["batch_id"] for p in pending] == ids
+    assert pending[2]["items"] == ["orchids-eng-gv-t1-ch05"]
+
+
+def test_submit_all_skips_chapters_already_waiting(monkeypatch, capsys):
+    from buddy.ingest import __main__ as cli
+    from buddy.ingest import batch
+
+    _chapters("orchids-eng-gv-t1", 3)
+    batch.submit(FakeBatches(), [("orchids-eng-gv-t1", 1)], log=lambda *a: None)
+    sent = {}
+    monkeypatch.setattr(cli, "client", lambda: None)
+    monkeypatch.setattr(cli.batch, "submit", lambda c, items: sent.setdefault("i", items) and ["b"])
+    cli.main(["submit-all", "--yes", "--force"])
+    assert sent["i"] == [("orchids-eng-gv-t1", 2), ("orchids-eng-gv-t1", 3)]
+
+
+def test_collect_all(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    from buddy.ingest import __main__ as cli
+    from buddy.ingest import batch
+
+    _chapters("orchids-eng-gv-t1", 1)
+    batch.submit(FakeBatches(), [("orchids-eng-gv-t1", 1)], log=lambda *a: None)
+    from tests.conftest import SAMPLE_RESULT
+    msg = SimpleNamespace(stop_reason="end_turn", model="claude-sonnet-5",
+                          content=[SimpleNamespace(type="text", text=json.dumps(SAMPLE_RESULT))],
+                          usage=SimpleNamespace(input_tokens=1000, output_tokens=500))
+    client = SimpleNamespace(messages=SimpleNamespace(batches=SimpleNamespace(
+        retrieve=lambda bid: SimpleNamespace(processing_status="ended"),
+        results=lambda bid: [SimpleNamespace(custom_id="orchids-eng-gv-t1-ch01",
+                                             result=SimpleNamespace(type="succeeded",
+                                                                    message=msg))])))
+    monkeypatch.setattr(cli, "client", lambda: client)
+    cli.main(["collect-all"])
+    out = capsys.readouterr().out
+    assert "indexed 1 chapters" in out
+    assert batch.pending_batches() == []
+    assert processed_path("orchids-eng-gv-t1", 1).exists()

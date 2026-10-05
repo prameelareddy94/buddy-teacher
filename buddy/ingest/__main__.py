@@ -125,12 +125,37 @@ def cmd_submit(a):
                  "or download the whole book in a browser and import it:\n"
                  f"  https://ncert.nic.in/textbook/pdf/{book.ncert_code}dd.zip\n"
                  f"  python -m buddy.ingest add-zip {book.key} ~/Downloads/{book.ncert_code}dd.zip")
-    bid = batch.submit(client(), ready)
-    print(f"Submitted batch {bid} with {len(ready)} chapter(s).")
-    print(f"Collect later with: python -m buddy.ingest collect {bid} --wait")
+    bids = batch.submit(client(), ready)
+    print(f"Submitted {len(ready)} chapter(s) in {len(bids)} batch(es).")
+    print("Collect later with: python -m buddy.ingest collect-all --wait")
     if failed:
         chs = ",".join(str(ch) for ch, _ in failed)
         print(f"Re-run for the skipped ones later: python -m buddy.ingest submit {a.book} {chs}")
+
+
+def cmd_collect_all(a):
+    """Collect every batch submitted from this computer that isn't collected yet."""
+    pending = batch.pending_batches()
+    if not pending:
+        print("No batches waiting.")
+        return
+    c = client()
+    for b in pending:
+        bid = b["batch_id"]
+        status = c.messages.batches.retrieve(bid).processing_status
+        if status != "ended" and not a.wait:
+            print(f"{bid}: {status} ({len(b['items'])} chapters) - not finished yet")
+            continue
+        print(f"{bid}: {len(b['items'])} chapters")
+        if status != "ended":
+            batch.wait(c, bid)
+        reports = batch.collect(c, bid)
+        print_reports(reports)
+        for r in reports:
+            if r["status"] == "ok":
+                index_chapter(r["book"], r["chapter"])
+        print(f"  indexed {sum(1 for r in reports if r['status'] == 'ok')} chapters")
+    cmd_costs(a)
 
 
 def cmd_collect(a):
@@ -242,15 +267,19 @@ def cmd_submit_all(a):
     from buddy.books import school_book_keys
     from buddy.ingest.download import local_chapters
 
+    waiting = {cid for b in batch.pending_batches() for cid in b["items"]}
     items, pages = [], 0
     for key in sorted(school_book_keys()):
         for ch in local_chapters(get_book(key)):
-            if not batch.processed_path(key, ch).exists():
+            if (not batch.processed_path(key, ch).exists()
+                    and batch.custom_id(key, ch) not in waiting):
                 items.append((key, ch))
                 with pymupdf.open(batch.chapter_pdf_path(key, ch)) as d:
                     pages += d.page_count
     if not items:
-        print("Nothing new to read: every school-book chapter is processed.")
+        print("Nothing new to read: every school-book chapter is processed"
+              + (f" or waiting in {len(batch.pending_batches())} batch(es) "
+                 "(collect-all --wait)." if waiting else "."))
         return
     est = pages * 0.005  # measured: ~$0.079 for a 16-page chapter at batch price
     print(f"{len(items)} chapters, {pages} pages -> about ${est:.2f} at batch price.")
@@ -258,8 +287,9 @@ def cmd_submit_all(a):
         print("Re-run with --yes to submit.")
         return
     gate(items, a.force)
-    bid = batch.submit(client(), items)
-    print(f"Submitted batch {bid}. Collect with: python -m buddy.ingest collect {bid} --wait")
+    bids = batch.submit(client(), items)
+    print(f"Submitted {len(bids)} batch(es). Usually done within an hour (max 24 h); "
+          "then: python -m buddy.ingest collect-all --wait")
 
 
 def cmd_remove(a):
@@ -285,7 +315,7 @@ def cmd_run(a):
     print(f"1/4 download {book.label} ch{ch:02d}")
     download_chapter(book, ch)
     print(f"2/4 submit batch ({INGEST_MODEL}, 50% batch price)")
-    bid = batch.submit(c, [(a.book, ch)])
+    [bid] = batch.submit(c, [(a.book, ch)])
     print(f"    batch id {bid} (safe to Ctrl-C; resume with `collect {bid} --wait`)")
     print("3/4 wait for results")
     batch.wait(c, bid)
@@ -396,6 +426,9 @@ def main(argv=None):
     sp.add_argument("--no-index", action="store_true")
     sp.set_defaults(fn=cmd_collect)
     sub.add_parser("costs").set_defaults(fn=cmd_costs)
+    sp = sub.add_parser("collect-all", help="collect every batch not collected yet")
+    sp.add_argument("--wait", action="store_true", help="wait for unfinished batches")
+    sp.set_defaults(fn=cmd_collect_all)
     sp = sub.add_parser("upload")
     sp.add_argument("file")
     sp.add_argument("--subject", default="unknown")

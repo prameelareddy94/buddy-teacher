@@ -4,6 +4,10 @@ from pathlib import Path
 
 import pymupdf
 
+# Some school PDFs embed fonts MuPDF can't parse ("FT_New_Memory_Face ... unknown file
+# format"). Pages still render; don't fill the terminal with it.
+pymupdf.TOOLS.mupdf_display_errors(False)
+
 # Longest image side in pixels. ~1200px keeps a page around 1.5k input tokens
 # while small print stays readable.
 MAX_SIDE = 1200
