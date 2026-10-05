@@ -2,29 +2,36 @@
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#ff8a3d">
-<title>Buddy Teacher</title><link rel="stylesheet" href="/static/style.css">
+<meta name="theme-color" content="#0d1b4d">
+<title>Buddy Teacher</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/kid.css">
 </head><body>
 <div class="app">
   <header>
-    <h1>🦉 Buddy</h1>
+    <div class="brand">
+      <span class="owl" id="owl" aria-hidden="true">🦉</span>
+      <div><h1>Buddy</h1><div class="tag">your study friend</div></div>
+    </div>
     <button class="ghost" id="readBtn" type="button" title="Read answers aloud" hidden>🔊</button>
-    <button class="ghost" id="quizBtn">🎯 Quiz me</button>
+    <button class="ghost" id="quizBtn">🎯<span class="lbl"> Quiz me</span></button>
     <a id="parentLink" href="/parent" hidden><button class="ghost">👪</button></a>
     <form method="post" action="/logout"><button class="ghost" title="Log out">🚪</button></form>
   </header>
   <div class="subjects" id="subjects"></div>
   <div id="chat">
-    <div class="msg buddy">Hi! I'm Buddy 🦉 Ask me anything from your school books.
-You can also take a 📷 photo of a question, or tap 🎤 and just ask me!</div>
+    <div class="msg buddy welcome"><span class="big" aria-hidden="true">🌟</span><div><b>Hi! I'm Buddy.</b>
+Ask me anything from your school books. Tap 🎤 and just talk, or take a 📷 photo of a question!</div></div>
   </div>
   <div id="preview"></div>
   <form class="ask" id="askForm">
-    <label class="photo-btn" style="display:flex;align-items:center;justify-content:center;border-radius:14px;min-height:52px;color:#fff;cursor:pointer">
+    <label class="photo-btn" title="Take a photo">
       📷<input type="file" id="photo" accept="image/*" capture="environment" hidden>
     </label>
     <button class="mic-btn" id="mic" type="button" title="Tap and talk" hidden>🎤</button>
-    <textarea id="q" rows="1" placeholder="Type or tap 🎤 to talk…" enterkeyhint="send"></textarea>
+    <textarea id="q" rows="1" placeholder="Ask me anything…" enterkeyhint="send"></textarea>
     <button id="send" type="submit">Ask</button>
   </form>
 </div>

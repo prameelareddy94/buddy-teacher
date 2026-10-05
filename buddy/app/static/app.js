@@ -16,6 +16,38 @@ function el(tag, cls, text) {
 }
 function scroll() { chat.scrollTop = chat.scrollHeight; }
 
+const SUBJECT_LOOK = {
+  "": { ic: "✨", c: "#ffd76a" }, evs: { ic: "🌱", c: "#4fe0b6" }, english: { ic: "📘", c: "#52c7ff" },
+  maths: { ic: "🔢", c: "#ff9f45" }, hindi: { ic: "अ", c: "#ff5d8f" }, kannada: { ic: "ಕ", c: "#a78bff" },
+};
+
+function dots() {
+  const t = el("div", "typing");
+  t.append(el("span"), el("span"), el("span"));
+  return t;
+}
+
+// A little burst of stars and confetti from an element (👍, quiz finished).
+function confetti(from) {
+  const r = from.getBoundingClientRect();
+  const x = r.left + r.width / 2, y = r.top + r.height / 2;
+  const bits = ["⭐", "✨", "🎉", "🌟", "💫", "🎈"];
+  for (let i = 0; i < 16; i++) {
+    const c = el("span", "confetti", bits[i % bits.length]);
+    const a = Math.random() * Math.PI * 2, d = 60 + Math.random() * 120;
+    c.style.left = x + "px"; c.style.top = y + "px";
+    c.style.setProperty("--dx", Math.cos(a) * d + "px");
+    c.style.setProperty("--dy", Math.sin(a) * d - 40 + "px");
+    c.style.setProperty("--rot", (Math.random() * 720 - 360) + "deg");
+    document.body.appendChild(c);
+    setTimeout(() => c.remove(), 1200);
+  }
+}
+
+// Buddy blinks now and then.
+const owl = document.getElementById("owl");
+if (owl) setInterval(() => { owl.classList.add("blink"); setTimeout(() => owl.classList.remove("blink"), 300); }, 5000);
+
 // Same parsing as the server: HINT: / ANSWER: / SOURCE:
 function parseSections(text) {
   const out = { hint: "", answer: "", source: "" };
@@ -39,7 +71,10 @@ async function loadMe() {
   const box = document.getElementById("subjects");
   const all = [{ key: "", label: "All" }, ...me.subjects];
   for (const s of all) {
-    const b = el("button", "chip" + (s.key === subject ? " on" : ""), s.label);
+    const look = SUBJECT_LOOK[s.key] || { ic: "⭐", c: "#a78bff" };
+    const b = el("button", "chip" + (s.key === subject ? " on" : ""));
+    b.style.setProperty("--c", look.c);
+    b.append(el("span", "ic", look.ic), el("span", "", s.label));
     b.type = "button";
     b.onclick = () => { subject = s.key; box.querySelectorAll(".chip").forEach(c => c.classList.remove("on")); b.classList.add("on"); };
     box.appendChild(b);
@@ -49,7 +84,7 @@ async function loadMe() {
 // A Buddy bubble with hint shown first and the answer behind a button.
 function buddyBubble(reveal = false) {
   const m = el("div", "msg buddy");
-  const typing = el("div", "typing", "Buddy is thinking…");
+  const typing = dots();
   const hint = el("div", "hint"); hint.hidden = true;
   const answer = el("div", reveal ? "answer" : "answer hidden");
   const source = el("div", "source");
@@ -94,6 +129,7 @@ function buddyBubble(reveal = false) {
       const vote = async (v) => {
         up.disabled = down.disabled = true;
         (v === "up" ? up : down).classList.add("on");
+        if (v === "up") confetti(up);
         const fd = new FormData(); fd.append("id", id); fd.append("vote", v);
         await fetch("/api/feedback", { method: "POST", body: fd });
         if (v === "down") {
@@ -191,12 +227,17 @@ document.getElementById("quizBtn").onclick = async () => {
 
 async function runQuiz(book, chapter) {
   const fd = new FormData(); fd.append("book", book); fd.append("chapter", chapter);
-  const wait = el("div", "msg buddy typing", "Making your quiz…"); chat.appendChild(wait); scroll();
+  const wait = el("div", "msg buddy typing-msg", "Making your quiz… "); wait.appendChild(dots()); chat.appendChild(wait); scroll();
   const { questions } = await (await fetch("/api/quiz", { method: "POST", body: fd })).json();
   wait.remove();
   let i = 0;
   const next = () => {
-    if (i >= questions.length) { chat.appendChild(el("div", "msg buddy", "🎉 Quiz done! Great work!")); scroll(); return; }
+    if (i >= questions.length) {
+      const done = el("div", "msg buddy", "🎉 Quiz done! Great work!");
+      chat.appendChild(done); scroll(); confetti(done);
+      if (Voice.autoRead) Voice.speak("Quiz done! Great work!");
+      return;
+    }
     const qq = questions[i++];
     const m = el("div", "msg buddy", `Q${i}. ${qq.question}`);
     const hint = el("div", "hint", "💡 " + qq.hint); hint.hidden = true;
