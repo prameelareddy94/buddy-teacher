@@ -120,8 +120,20 @@ SPLIT_SCHEMA = {
 }
 
 
-def detect_chapters(pages: list[Path], client=None, log=print) -> tuple[list[dict], float]:
-    """Ask Claude Haiku where each chapter starts. Returns (chapters, cost in USD)."""
+def pdf_thumbs(pdf: Path) -> list[str]:
+    """Small JPEG (base64) of every page of a PDF, for chapter detection."""
+    out = []
+    with pymupdf.open(pdf) as doc:
+        for page in doc:
+            zoom = THUMB_SIDE / max(page.rect.width, page.rect.height)
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
+            out.append(base64.standard_b64encode(pix.tobytes("jpg", jpg_quality=70)).decode())
+    return out
+
+
+def detect_chapters(pages: list, client=None, log=print) -> tuple[list[dict], float]:
+    """Ask Claude Haiku where each chapter starts. `pages` are page-image paths or
+    base64 JPEG thumbnails. Returns (chapters, cost in USD)."""
     if client is None:
         from buddy.llm.claude import sync_client
         client = sync_client()
@@ -132,8 +144,9 @@ def detect_chapters(pages: list[Path], client=None, log=print) -> tuple[list[dic
         content: list[dict] = []
         for i, p in enumerate(part, start + 1):
             content.append({"type": "text", "text": f"page {i}"})
+            data = p if isinstance(p, str) else _thumb_b64(p)
             content.append({"type": "image", "source": {
-                "type": "base64", "media_type": "image/jpeg", "data": _thumb_b64(p)}})
+                "type": "base64", "media_type": "image/jpeg", "data": data}})
         content.append({"type": "text", "text":
                         "These are pages of a school textbook (Class 4, India). List every "
                         "chapter (lesson) that STARTS on these pages: its number as printed "
@@ -165,6 +178,38 @@ def parse_split(spec: str) -> list[dict]:
             raise SystemExit(f"Bad --split part {part!r}; use CHAPTER:START_PAGE,…")
         out.append({"number": int(m.group(1)), "title": "", "start_page": int(m.group(2))})
     return sorted(out, key=lambda c: c["start_page"])
+
+
+def split_ranges(chapters: list[dict], page_count: int,
+                 taken: set[int] | None = None) -> list[dict]:
+    """Chapter number + page range for each detected start (pages before the first
+    chapter, like the cover and contents, are skipped)."""
+    taken = taken if taken is not None else set()
+    rows = []
+    for i, ch in enumerate(chapters):
+        first = ch["start_page"]
+        last = chapters[i + 1]["start_page"] - 1 if i + 1 < len(chapters) else page_count
+        if last < first:
+            continue
+        num = ch["number"]
+        if num < 1 or num in taken:
+            num = max(taken | {0}) + 1
+        taken.add(num)
+        rows.append({"chapter": num, "title": ch["title"], "first": first, "last": last,
+                     "pages": f"{first}-{last}"})
+    return rows
+
+
+def write_pdf_chapters(book_key: str, pdf: Path, rows: list[dict]) -> None:
+    """Cut a whole-book PDF into data/raw/<book>/chNN.pdf files."""
+    with pymupdf.open(pdf) as src:
+        for r in rows:
+            out = pymupdf.open()
+            out.insert_pdf(src, from_page=r["first"] - 1, to_page=r["last"] - 1)
+            dest = chapter_pdf_path(book_key, r["chapter"])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            out.save(dest, garbage=3, deflate=True)
+            out.close()
 
 
 def write_chapters(book_key: str, pages: list[Path], chapters: list[dict],

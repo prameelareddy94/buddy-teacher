@@ -43,6 +43,21 @@ From the command line:
 iPhone photos must be JPEG: set Settings → Camera → Formats → Most Compatible, or export
 them as JPEG.
 
+**Orchids e-books from the portal's e-book listing (easiest).** Save the JSON the portal
+returns for a subject's e-books (the response with `"results": [...]`) as a file, e.g.
+`english.json`, then:
+```bash
+python -m buddy.ingest import-orchids english.json          # plan: which books, keys, sizes
+python -m buddy.ingest import-orchids english.json --go     # download PDFs + split chapters
+python -m buddy.ingest submit-all                           # estimate; add --yes to submit
+python -m buddy.ingest collect <batch_id> --wait
+```
+Many titles are uploaded several times (per zone or volume), so only the newest copy of
+each title is kept. Each title becomes its own school book, e.g. `orchids-eng-gv-t1` →
+"English Grammar (Term 1)", and answers cite that book. Chapters are found automatically
+(about $0.05 a book). The split is saved next to the PDF as `*.chapters.json`; edit it and
+re-run with `--go --only <key>` to fix a book.
+
 **School e-books** (page images on the school's content server, by e-book id) import a
 whole book at once, from a computer that can open the page links:
 ```bash

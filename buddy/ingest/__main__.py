@@ -20,6 +20,11 @@ Her school's own books (e.g. Orchids), from phone photos:
   python -m buddy.ingest add-photos orchids-evs 3 ~/Pictures/evs-ch3/*.jpg --now
   python -m buddy.ingest remove evs          # take a book out of search (e.g. NCERT EVS)
 
+Orchids e-books from the portal's e-book listing (save the JSON per subject):
+  python -m buddy.ingest import-orchids english.json          # shows the plan
+  python -m buddy.ingest import-orchids english.json --go     # download + split
+  python -m buddy.ingest submit-all                           # read all new chapters
+
 Her school's e-books (page images by e-book id), whole book at once:
   python -m buddy.ingest fetch-ebook orchids-evs 1749
   python -m buddy.ingest submit orchids-evs all   # then collect as usual
@@ -187,6 +192,71 @@ def cmd_fetch_ebook(a):
     print(f"Then: python -m buddy.ingest submit {a.book} all   (batch, half price)")
 
 
+def cmd_import_orchids(a):
+    from buddy.ingest import orchids
+
+    rows = []
+    for f in a.listing:
+        rows += orchids.plan(orchids.load_listing(Path(f)))
+    if a.only:
+        rows = [r for r in rows if r.get("key") in a.only]
+    total = sum(r["entry"].get("file_size") or 0 for r in rows if not r["skip"])
+    print(f"{'id':>6}  {'size':>7}  {'book key':28} name   (newest copy of each title)")
+    for r in rows:
+        e = r["entry"]
+        size = f"{(e.get('file_size') or 0) / 1e6:.0f} MB"
+        if r["skip"]:
+            print(f"{e.get('id', ''):>6}  {size:>7}  SKIP ({r['skip']}): {e.get('book_name')}")
+        else:
+            print(f"{e['id']:>6}  {size:>7}  {r['key']:28} {r['name']}")
+    print(f"{sum(1 for r in rows if not r['skip'])} books, {total / 1e6:.0f} MB to download.")
+    if not a.go:
+        print("Nothing downloaded yet. Re-run with --go to download and split into chapters "
+              "(chapter finding costs about $0.05 a book).")
+        return
+    for r in rows:
+        if r["skip"]:
+            continue
+        print(f"{r['name']} ({r['key']}):")
+        try:
+            chapters = orchids.import_one(r)
+        except SystemExit as e:
+            print(f"  FAILED: {e}")
+            continue
+        for c in chapters:
+            print(f"  ch{c['chapter']:02d}  pages {c['pages']:>9}  {c['title']}")
+    print("Check the chapter tables. To fix one book's split, edit "
+          "data/raw/<book>/ebook-<id>.chapters.json and re-run with --go --only <book>.")
+    print("Then: python -m buddy.ingest submit-all   (batch, half price)")
+
+
+def cmd_submit_all(a):
+    """Submit every school-book chapter that hasn't been processed yet, in one batch."""
+    import pymupdf
+
+    from buddy.books import school_book_keys
+    from buddy.ingest.download import local_chapters
+
+    items, pages = [], 0
+    for key in sorted(school_book_keys()):
+        for ch in local_chapters(get_book(key)):
+            if not batch.processed_path(key, ch).exists():
+                items.append((key, ch))
+                with pymupdf.open(batch.chapter_pdf_path(key, ch)) as d:
+                    pages += d.page_count
+    if not items:
+        print("Nothing new to read: every school-book chapter is processed.")
+        return
+    est = pages * 0.005  # measured: ~$0.079 for a 16-page chapter at batch price
+    print(f"{len(items)} chapters, {pages} pages -> about ${est:.2f} at batch price.")
+    if not a.yes:
+        print("Re-run with --yes to submit.")
+        return
+    gate(items, a.force)
+    bid = batch.submit(client(), items)
+    print(f"Submitted batch {bid}. Collect with: python -m buddy.ingest collect {bid} --wait")
+
+
 def cmd_remove(a):
     from buddy.rag import store
 
@@ -303,6 +373,15 @@ def main(argv=None):
                                     "(skips automatic detection)")
     sp.add_argument("--url", help="page URL template with {ebook} and {page}")
     sp.set_defaults(fn=cmd_fetch_ebook)
+    sp = sub.add_parser("import-orchids", help="Orchids e-books from the portal listing")
+    sp.add_argument("listing", nargs="+", help="saved JSON listing file(s)")
+    sp.add_argument("--go", action="store_true", help="download and split (else just plan)")
+    sp.add_argument("--only", nargs="+", help="only these book keys")
+    sp.set_defaults(fn=cmd_import_orchids)
+    sp = sub.add_parser("submit-all", help="read all new school-book chapters (one batch)")
+    sp.add_argument("--yes", action="store_true")
+    sp.add_argument("--force", action="store_true")
+    sp.set_defaults(fn=cmd_submit_all)
     sp = sub.add_parser("remove", help="take a book out of search")
     sp.add_argument("book")
     sp.set_defaults(fn=cmd_remove)

@@ -1,0 +1,181 @@
+"""Import Orchids e-books from the school portal's e-book listing (JSON).
+
+Save the listing the portal shows for a subject (the JSON with "results": [...]) to a
+file, then:
+
+  python -m buddy.ingest import-orchids english.json            # plan only
+  python -m buddy.ingest import-orchids english.json --go       # download + split
+  python -m buddy.ingest submit-all                             # read them (batch)
+
+The same book is often listed several times (re-uploads per school zone/volume), so
+each title is kept once: the newest upload. Every title becomes its own school book
+(e.g. orchids-eng-gv-t1, "English Grammar (Term 1)") so citations name the right book.
+Only for books the child is enrolled for; keep the result private.
+"""
+import json
+import re
+from pathlib import Path
+
+import httpx
+import pymupdf
+
+from buddy.books import BOOKS, add_school_book, load_custom_books
+from buddy.config import get_settings
+from buddy.ingest.ebook import detect_chapters, pdf_thumbs, split_ranges, write_pdf_chapters
+
+SUBJECT_NAMES = {
+    "english": "english", "eng": "english",
+    "hindi": "hindi", "hin": "hindi",
+    "kannada": "kannada", "kan": "kannada",
+    "mathematics": "maths", "maths": "maths", "math": "maths", "mat": "maths",
+    "evs": "evs", "environmental studies": "evs", "environmental science": "evs",
+    "science": "evs", "social studies": "evs", "sst": "evs",
+}
+SUBJECT_LABEL = {"english": "English", "hindi": "Hindi", "kannada": "Kannada",
+                 "maths": "Maths", "evs": "EVS"}
+# Codes seen in Orchids book names.
+PART_NAMES = {"CS": "Coursebook", "RC": "Reading", "GV": "Grammar", "WS": "Writing",
+              "LIT": "Literature", "LS": "Listening & Speaking"}
+# Codes that are subjects, not parts.
+SUBJECT_CODES = {"ENG", "HIN", "KAN", "MAT", "MATHS", "EVS", "SCI", "SST"}
+
+
+def subject_of(entry: dict) -> str | None:
+    return SUBJECT_NAMES.get(str(entry.get("subject_name", "")).strip().lower())
+
+
+def grade_of(entry: dict) -> int:
+    m = re.search(r"\d+", str(entry.get("grade_name", "")))
+    return int(m.group()) if m else 4
+
+
+def latest_per_title(results: list[dict]) -> list[dict]:
+    """One entry per book title: the most recent upload that has a PDF."""
+    best: dict[str, dict] = {}
+    for e in results:
+        if not e.get("file_url") or e.get("pages_ready") is False:
+            continue
+        name = (e.get("book_name") or e.get("title") or "").strip()
+        cur = best.get(name)
+        if cur is None or (e.get("created_at", ""), e.get("id", 0)) > \
+                (cur.get("created_at", ""), cur.get("id", 0)):
+            best[name] = e
+    return sorted(best.values(), key=lambda e: e.get("book_name", ""))
+
+
+SUBJECT_KEY = {"english": "eng", "hindi": "hin", "kannada": "kan", "maths": "maths",
+               "evs": "evs"}
+
+
+def describe(book_name: str, subject: str) -> tuple[str, str]:
+    """('orchids-eng-gv-t1', 'English Grammar (Term 1)') from e.g.
+    'Textbook_Eng_GV_G4_T1_26-27' (word order in the names varies)."""
+    kind, part, part_code, other = "Textbook", "", "", []
+    term = vol = None
+    annual = False
+    for p in re.split(r"[_\s]+", book_name.strip()):
+        u = p.upper()
+        if u == "WORKBOOK":
+            kind = "Workbook"
+        elif u == "TEXTBOOK" or u == "BOOK" or u in SUBJECT_CODES:
+            continue
+        elif u in PART_NAMES:
+            part, part_code = PART_NAMES[u], u.lower()
+        elif re.fullmatch(r"G\d+", u) or re.fullmatch(r"\d{2}-\d{2}", p):
+            continue  # grade and session year: the same for all her books
+        elif m := re.fullmatch(r"T(\d)", u):
+            term = m.group(1)
+        elif m := re.fullmatch(r"V(\d+)", u):
+            vol = m.group(1)
+        elif u == "ANNUAL":
+            annual = True
+        elif p:
+            other.append(re.sub(r"[^a-z0-9]", "", p.lower()))
+    label = SUBJECT_LABEL[subject]
+    if kind == "Workbook":
+        name = f"{label} Workbook" + (f" Vol {vol}" if vol else "")
+        bits = ["wb", f"v{vol}" if vol else ""]
+    else:
+        name = f"{label} {part or 'Textbook'}"
+        bits = [part_code or "tb"]
+    extra = ([f"Term {term}"] if term else []) + (["Annual"] if annual else [])
+    if kind != "Workbook" and vol:
+        extra.append(f"Vol {vol}")
+    if extra:
+        name += f" ({', '.join(extra)})"
+    bits += [f"t{term}" if term else "", "annual" if annual else "",
+             f"v{vol}" if vol and kind != "Workbook" else "", *other]
+    key = "-".join(["orchids", SUBJECT_KEY[subject], *[b for b in bits if b]])
+    return key[:42].rstrip("-"), name
+
+
+def plan(listing: dict) -> list[dict]:
+    rows = []
+    for e in latest_per_title(listing.get("results", [])):
+        subject = subject_of(e)
+        if not subject:
+            rows.append({"entry": e, "skip": f"unknown subject {e.get('subject_name')!r}"})
+            continue
+        key, name = describe(e.get("book_name") or e.get("title", ""), subject)
+        rows.append({"entry": e, "subject": subject, "grade": grade_of(e), "key": key,
+                     "name": name, "skip": None})
+    return rows
+
+
+def pdf_path(key: str, ebook_id) -> Path:
+    return get_settings().raw_dir / key / f"ebook-{ebook_id}.pdf"
+
+
+def download(entry: dict, dest: Path, get=None, log=print) -> Path:
+    size = entry.get("file_size") or 0
+    if dest.exists():  # only complete downloads are renamed from .part
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".part")
+    url = entry["file_url"]
+    log(f"  downloading {entry.get('file_name', url)} ({size / 1e6:.1f} MB)…")
+    if get is not None:  # tests
+        tmp.write_bytes(get(url))
+    else:
+        headers = {"User-Agent": "BuddyTeacher (personal study helper; parent account)"}
+        with httpx.stream("GET", url, headers=headers, follow_redirects=True,
+                          timeout=httpx.Timeout(300, connect=30)) as r:
+            r.raise_for_status()
+            with open(tmp, "wb") as f:
+                for chunk in r.iter_bytes(1 << 20):
+                    f.write(chunk)
+    if tmp.read_bytes()[:5] != b"%PDF-":
+        tmp.unlink()
+        raise SystemExit(f"{url} did not return a PDF (is this computer logged in / allowed?)")
+    tmp.replace(dest)
+    return dest
+
+
+def import_one(row: dict, client=None, get=None, log=print) -> list[dict]:
+    """Download, register as a school book, split into chapters."""
+    e = row["entry"]
+    load_custom_books()
+    if row["key"] not in BOOKS:
+        add_school_book(row["key"], row["subject"], row["name"], grade=row["grade"],
+                        title=e.get("book_name", ""))
+    pdf = download(e, pdf_path(row["key"], e["id"]), get=get, log=log)
+    with pymupdf.open(pdf) as doc:
+        n = doc.page_count
+    split_file = pdf.with_suffix(".chapters.json")
+    if split_file.exists():
+        rows = json.loads(split_file.read_text())
+    else:
+        log(f"  {n} pages; finding chapters…")
+        chapters, cost = detect_chapters(pdf_thumbs(pdf), client=client, log=log)
+        if not chapters:  # no chapter headings found: keep the whole book as one
+            chapters = [{"number": 1, "title": e.get("book_name", ""), "start_page": 1}]
+        rows = split_ranges(chapters, n)
+        split_file.write_text(json.dumps(rows, ensure_ascii=False, indent=2))
+        log(f"  chapter detection ${cost:.3f}")
+    write_pdf_chapters(row["key"], pdf, rows)
+    return rows
+
+
+def load_listing(path: Path) -> dict:
+    data = json.loads(Path(path).expanduser().read_text())
+    return data if isinstance(data, dict) else {"results": data}
