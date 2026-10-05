@@ -173,6 +173,49 @@ async def ask(
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+@app.get("/api/voice")
+def voice_config(_: str = Depends(need_kid)):
+    """Which speech engines the server offers; the page falls back to the browser's."""
+    from buddy.voice import stt, tts
+
+    return {"stt": "whisper" if stt.enabled() else "browser",
+            "stt_langs": sorted(stt.WHISPER_LANGS) if stt.enabled() else [],
+            "tts_langs": tts.available_langs()}
+
+
+@app.post("/api/transcribe")
+async def transcribe(audio: UploadFile = File(...), subject: str = Form(""),
+                     _: str = Depends(need_kid)):
+    from buddy.voice import stt
+
+    if not stt.enabled():
+        raise HTTPException(503, "Whisper is not set up on the server")
+    data = await audio.read(MAX_UPLOAD + 1)
+    if len(data) > MAX_UPLOAD:
+        raise HTTPException(413, "Recording too long")
+    try:
+        text = await asyncio.to_thread(stt.transcribe, data, audio.filename or "a.webm",
+                                       subject if subject in SUBJECTS else None)
+    except LookupError as e:
+        raise HTTPException(400, str(e))
+    return {"text": text}
+
+
+@app.post("/api/tts")
+async def tts_audio(text: str = Form(...), lang: str = Form(""), _: str = Depends(need_kid)):
+    from fastapi import Response
+
+    from buddy.voice import tts
+
+    if not text.strip() or len(text) > 2000:
+        raise HTTPException(400, "text must be 1-2000 characters")
+    try:
+        wav = await asyncio.to_thread(tts.synthesize, text, lang or None)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    return Response(wav, media_type="audio/wav", headers={"Cache-Control": "private, max-age=86400"})
+
+
 @app.get("/api/chapters")
 def chapters(subject: str, _: str = Depends(need_kid)):
     """Ingested chapters for a subject, current class first."""

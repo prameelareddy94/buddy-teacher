@@ -52,6 +52,7 @@ form.ask textarea { flex: 1; resize: none; border-radius: 16px; border: 2px soli
                     background: var(--card); color: var(--ink); }
 .mic-btn { background: #e8505b; width: 64px; padding: 0; font-size: 28px; border-radius: 14px; }
 .mic-btn.on { animation: pulse 1s infinite; background: #c62834; }
+.mic-btn.thinking { opacity: .6; animation: pulse 2s infinite; }
 @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(232,80,91,.6); } 50% { box-shadow: 0 0 0 12px rgba(232,80,91,0); } }
 .photo-btn { background: var(--accent-2); width: 56px; padding: 0; font-size: 26px; }
 #preview { padding: 0 16px; }

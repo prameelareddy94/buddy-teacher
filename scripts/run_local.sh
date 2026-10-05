@@ -8,6 +8,9 @@ cd "$(dirname "$0")/.."
 [[ -d .venv ]] || python3 -m venv .venv
 . .venv/bin/activate
 pip install -q -r requirements.txt -r requirements-dev.txt
+# Local voice (Whisper + Piper). Optional: Buddy falls back to the browser's speech.
+pip install -q "faster-whisper>=1.1" || echo "Whisper didn't install; the browser will listen instead."
+pip install -q "piper-tts>=1.3" || echo "Piper didn't install; the browser's voice will speak instead."
 
 if [[ ! -f .env ]]; then
   cp .env.example .env
@@ -21,5 +24,6 @@ PY
   exit 0
 fi
 
+[[ -d data/models/whisper ]] || python -m buddy.voice setup || true
 curl -sf http://127.0.0.1:11434/api/tags >/dev/null || echo "Warning: Ollama isn't running; local answers will fall back to Claude."
 exec uvicorn buddy.app.main:app --host "${HOST:-127.0.0.1}" --port "${PORT:-8000}" --reload

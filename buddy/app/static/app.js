@@ -217,36 +217,50 @@ async function runQuiz(book, chapter) {
 // ---- Voice ----
 const mic = document.getElementById("mic");
 const readBtn = document.getElementById("readBtn");
-if (Voice.canListen) {
-  mic.hidden = false;
-  mic.onclick = () => {
-    if (Voice.listening()) { Voice.stopListening(); return; }
-    if (busy) return;
-    const before = q.value;
-    const started = Voice.listen(subject, (text) => {
-      q.value = text;
-    }, (finalText, err) => {
-      mic.classList.remove("on");
-      if (finalText) {
-        q.value = finalText;
-        via = "voice";
-        form.requestSubmit();
-      } else {
-        q.value = before;
-        if (err === "not-allowed" || err === "service-not-allowed") {
-          chat.appendChild(el("div", "msg buddy", "I can't hear you yet. Ask a grown-up to allow the microphone for this page 🎤"));
-          scroll();
+const placeholder = q.placeholder;
+
+function setupVoice() {
+  if (Voice.canListen) {
+    mic.hidden = false;
+    mic.onclick = () => {
+      if (Voice.listening()) { Voice.stopListening(); return; }
+      if (busy) return;
+      const before = q.value;
+      const started = Voice.listen(subject, (text) => {
+        q.value = text;
+      }, (finalText, err) => {
+        mic.classList.remove("on", "thinking");
+        q.placeholder = placeholder;
+        if (finalText) {
+          q.value = finalText;
+          via = "voice";
+          form.requestSubmit();
+          return;
         }
-      }
-    });
-    if (started) mic.classList.add("on");
-  };
+        q.value = before;
+        let msg = null;
+        if (err === "not-allowed" || err === "service-not-allowed") {
+          msg = "I can't hear you yet. Ask a grown-up to allow the microphone for this page 🎤";
+        } else if (err === "no-speech") {
+          msg = "I didn't hear anything. Tap 🎤 and speak a little louder 🙂";
+        } else if (err === "network") {
+          msg = "I couldn't understand that recording. Please try again 🎤";
+        }
+        if (msg) { chat.appendChild(el("div", "msg buddy", msg)); scroll(); }
+      }, (status) => {
+        if (status === "listening") { mic.classList.add("on"); q.placeholder = "Listening… 👂"; }
+        if (status === "thinking") { mic.classList.remove("on"); mic.classList.add("thinking"); q.placeholder = "Writing down what you said…"; }
+      });
+      if (started) mic.classList.add("on");
+    };
+  }
+  if (Voice.canSpeak) {
+    readBtn.hidden = false;
+    const paint = () => { readBtn.textContent = Voice.autoRead ? "🔊" : "🔇"; readBtn.title = Voice.autoRead ? "Reading answers aloud (tap to stop)" : "Tap to read answers aloud"; };
+    readBtn.onclick = () => { Voice.setAutoRead(!Voice.autoRead); paint(); };
+    paint();
+  }
 }
-if (Voice.canSpeak) {
-  readBtn.hidden = false;
-  const paint = () => { readBtn.textContent = Voice.autoRead ? "🔊" : "🔇"; readBtn.title = Voice.autoRead ? "Reading answers aloud (tap to stop)" : "Tap to read answers aloud"; };
-  readBtn.onclick = () => { Voice.setAutoRead(!Voice.autoRead); paint(); };
-  paint();
-}
+Voice.init().then(setupVoice);
 
 loadMe();

@@ -1,0 +1,4 @@
+# Local voice: Whisper (listening) and Piper (natural speech). Optional: without them
+# Buddy uses the tablet's own speech. Then run: python -m buddy.voice setup
+faster-whisper>=1.1
+piper-tts>=1.3

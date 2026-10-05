@@ -44,6 +44,15 @@ class Settings(BaseSettings):
     verified_threshold: float = 0.80
     verified_direct: float = 0.92
 
+    # Voice. "whisper"/"piper" run locally (free, better); "browser" uses the tablet's own.
+    stt_engine: str = "whisper"
+    whisper_model: str = "small"          # "medium" is more accurate, ~3x slower
+    tts_engine: str = "piper"
+    piper_voice_en: str = "en_US-hfc_female-medium"
+    piper_voice_hi: str = "hi_IN-priyamvada-medium"
+    piper_voice_kn: str = ""              # no Kannada Piper voice: the tablet's voice is used
+    tts_speed: float = 1.12               # >1 is slower (Piper length_scale); kids like it calm
+
     # Nightly review of weak answers by Claude (runs inside the server)
     review_enabled: bool = True
     review_time: str = "02:30"          # HH:MM in review_tz
@@ -73,6 +82,10 @@ class Settings(BaseSettings):
     @property
     def chroma_dir(self) -> Path:
         return self.data_dir / "chroma"
+
+    @property
+    def models_dir(self) -> Path:
+        return self.data_dir / "models"
 
     @property
     def db_path(self) -> Path:

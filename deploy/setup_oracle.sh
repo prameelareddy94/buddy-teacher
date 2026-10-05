@@ -39,6 +39,8 @@ echo "==> Python environment (CPU-only PyTorch for bge-m3)"
 "$APP_DIR/.venv/bin/pip" install -q --upgrade pip
 "$APP_DIR/.venv/bin/pip" install -q torch --index-url https://download.pytorch.org/whl/cpu
 "$APP_DIR/.venv/bin/pip" install -q -r "$APP_DIR/requirements.txt"
+"$APP_DIR/.venv/bin/pip" install -q "faster-whisper>=1.1" || echo "    (Whisper failed; browser listens)"
+"$APP_DIR/.venv/bin/pip" install -q "piper-tts>=1.3" || echo "    (Piper failed; browser speaks)"
 
 echo "==> .env"
 if [[ ! -f "$APP_DIR/.env" ]]; then
@@ -72,6 +74,10 @@ ollama pull "$OLLAMA_MODEL"
 echo "==> Pre-download bge-m3 embeddings (~2.3 GB)"
 sudo -u "$APP_USER" HF_HOME="$APP_DIR/.cache/huggingface" "$APP_DIR/.venv/bin/python" -c \
   "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-m3')"
+
+echo "==> Voice models (Whisper small + Piper voices)"
+(cd "$APP_DIR" && sudo -u "$APP_USER" HF_HOME="$APP_DIR/.cache/huggingface" \
+  "$APP_DIR/.venv/bin/python" -m buddy.voice setup) || echo "    (voice setup skipped)"
 
 echo "==> systemd service"
 cp "$APP_DIR/deploy/buddy-teacher.service" /etc/systemd/system/buddy-teacher.service

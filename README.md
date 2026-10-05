@@ -201,22 +201,28 @@ local model was overruled, hover over the answer to see what it had said.
 
 ## Voice
 
-- **Talk instead of typing.** She taps the red 🎤, asks, and the question sends when she
-  stops talking. It listens in English, Hindi or Kannada based on the subject chip (English
-  under "All").
-- **Buddy reads aloud.** It reads the hint first, then the answer and where to find it
-  ("You can find this in EVS, Chapter 1, page 5") when she taps "Show answer". Quiz
-  questions are read too. 🔊 in the header turns auto-reading on or off, and each answer
-  has its own 🔊 button.
-- **It uses the browser's own speech engines,** so there's no extra server or cost. It
-  works in Safari on iPad/iPhone and in Chrome on Android. The microphone needs HTTPS,
-  which Tailscale Serve provides, or `localhost` when testing on the laptop. The browser
-  asks for microphone permission the first time. iPad and Chrome may send the audio to
-  Apple or Google to recognise it.
-- **Voices vary by device.** Kannada text-to-speech may be missing on some tablets; add
-  the voice in the tablet's settings (iPad: Settings → Accessibility → Spoken Content →
-  Voices).
-- The parent view marks spoken questions with 🎤.
+- **Talk instead of typing.** She taps the red 🎤 and asks. Recording stops when she pauses.
+  **Whisper** turns the recording into text on the server, running locally for free. It is
+  given the chapter titles and vocabulary of her books for the chosen subject, so book
+  words come out right. It listens in English or Hindi depending on the subject chip.
+  Kannada uses the tablet's own recogniser, because Whisper is weak at Kannada.
+- **Buddy reads aloud** with a natural **Piper** voice (English and Hindi), at a slightly
+  slow pace. It reads the hint first, then the answer and where to find it. Kannada, and
+  any language without a Piper voice, uses the best voice the device has (Premium,
+  Enhanced or Natural voices are preferred). 🔊 in the header turns auto-reading on or
+  off, and each answer has its own 🔊 button.
+- **Setup:**
+  ```bash
+  pip install -r requirements-voice.txt
+  python -m buddy.voice setup      # downloads Whisper small (~500 MB) and the Piper voices
+  ```
+  `run_local.sh` and `setup_oracle.sh` do this for you. Settings live in `.env`:
+  - `WHISPER_MODEL`: `medium` is more accurate and about 3x slower.
+  - `TTS_SPEED`: higher is slower.
+  - `PIPER_VOICE_EN` / `PIPER_VOICE_HI`: any voice from the Piper voice list.
+  - `STT_ENGINE` / `TTS_ENGINE`: `browser` turns the local voice off.
+- **The microphone needs HTTPS** (Tailscale Serve) or `localhost`. The parent view marks
+  spoken questions with 🎤 and shows exactly what Whisper heard.
 
 ## Fixing answers that didn't help
 
