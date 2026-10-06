@@ -209,11 +209,24 @@ async function ask({ text = "", file = null, explainMoreOf = null } = {}) {
   }
 }
 
+// While a quiz question is open, the main box and big 🎤 answer it (not a new question).
+let quizMode = null;
+const BASE_PH = q.placeholder, QUIZ_PH = "Type or say your answer…";
+function setQuizMode(mode) {
+  quizMode = mode;
+  q.placeholder = mode ? QUIZ_PH : BASE_PH;
+}
+
 form.onsubmit = (e) => {
   e.preventDefault();
   const text = q.value.trim();
   const file = photo.files[0] || null;
   if (!text && !file) return;
+  if (quizMode && text && !file) {
+    q.value = ""; via = "typed";
+    quizMode.answer(text);
+    return;
+  }
   q.value = ""; photo.value = ""; preview.innerHTML = "";
   ask({ text, file });
 };
@@ -241,6 +254,34 @@ document.getElementById("quizBtn").onclick = async () => {
   m.appendChild(acts); chat.appendChild(m); scroll();
 };
 
+// Which option did she mean? "b", "2", "second", "sunlight water air", "yes", "सही"…
+function matchOption(text, options) {
+  const norm = (s) => s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+  const t = norm(text).replace(/^(option|answer|it is|it's|its|i think)\s+/, "");
+  if (!t) return null;
+  const tf = { true: ["true", "yes", "right", "correct", "सही", "हाँ", "हां", "ಹೌದು", "ಸರಿ"],
+               false: ["false", "no", "wrong", "incorrect", "गलत", "नहीं", "ಇಲ್ಲ", "ತಪ್ಪು"] };
+  if (options.length === 2 && options[0] === "True") {
+    if (tf.true.some(w => t === w || t.startsWith(w + " "))) return "True";
+    if (tf.false.some(w => t === w || t.startsWith(w + " "))) return "False";
+  }
+  const idx = { a: 0, b: 1, c: 2, d: 3, "1": 0, "2": 1, "3": 2, "4": 3, one: 0, two: 1, three: 2, four: 3,
+                first: 0, second: 1, third: 2, fourth: 3 };
+  if (t in idx && idx[t] < options.length) return options[idx[t]];
+  let best = null, bestScore = 0;
+  const tw = new Set(t.split(" "));
+  for (const o of options) {
+    const on = norm(o);
+    if (on === t) return o;
+    if ((t.length >= 3 && on.includes(t)) || (on.length >= 3 && t.includes(on))) return o;
+    const ow = new Set(on.split(" "));
+    const common = [...ow].filter(w => tw.has(w)).length;
+    const score = common / Math.max(ow.size, tw.size);
+    if (score > bestScore) { best = o; bestScore = score; }
+  }
+  return bestScore >= 0.6 ? best : null;
+}
+
 async function runQuiz(book, chapter) {
   const fd = new FormData(); fd.append("book", book); fd.append("chapter", chapter);
   const wait = el("div", "msg buddy typing-msg", "Making your quiz… "); wait.appendChild(dots()); chat.appendChild(wait); scroll();
@@ -260,6 +301,7 @@ async function runQuiz(book, chapter) {
   }
 
   const next = () => {
+    if (stopped) return;
     if (i >= questions.length) return finish();
     const qq = questions[i++];
     const m = el("div", "msg buddy quiz-card");
@@ -282,7 +324,7 @@ async function runQuiz(book, chapter) {
       src.hidden = false;
       const nb = el("button", "", i < questions.length ? "Next ➡️" : "See my score 🏆"); nb.type = "button";
       nb.onclick = () => { nb.remove(); next(); };
-      acts.replaceChildren(nb);
+      acts.replaceChildren(nb, stopButton());
       scroll();
     };
     const handle = async (given, btn) => {
@@ -338,13 +380,43 @@ async function runQuiz(book, chapter) {
     }
     const hb = el("button", "ghost", "💡 Hint"); hb.type = "button";
     hb.onclick = () => { hint.hidden = false; hb.remove(); scroll(); say(qq.hint); };
-    acts.append(hb);
+    acts.append(hb, stopButton());
     m.append(hint, feedback, src, acts);
+    setQuizMode({
+      answer: (text) => {
+        if (done) { showResult(true, false, "Tap Next ➡️ for the next question 🙂"); return; }
+        if (qq.options && qq.options.length) {
+          const o = matchOption(text, qq.options);
+          const btn = o && [...m.querySelectorAll(".opt")].find(b => b.dataset.value === o);
+          if (btn && !btn.disabled) { btn.click(); return; }
+          showResult(false, true, `I heard "${text}". Tap your answer, or say A, B, C…`);
+          return;
+        }
+        const input = m.querySelector(".quiz-answer input");
+        input.value = text;
+        m.querySelector(".quiz-answer").requestSubmit();
+      },
+    });
     chat.appendChild(m); scroll();
     say([`Question ${i}. ${qq.question}`, ...(qq.options || [])]);
   };
 
+  function stopButton() {
+    const b = el("button", "ghost", "✖ Stop quiz"); b.type = "button";
+    b.onclick = () => {
+      setQuizMode(null);
+      stopped = true;
+      chat.querySelectorAll(".quiz-card .actions").forEach(a => a.replaceChildren());
+      chat.appendChild(el("div", "msg buddy", "Quiz stopped. Ask me anything! 🙂"));
+      scroll();
+    };
+    return b;
+  }
+  let stopped = false;
+
   const finish = () => {
+    setQuizMode(null);
+    if (stopped) return;
     const n = questions.length;
     const card = el("div", "msg buddy quiz-score");
     const starRow = "⭐".repeat(stars) + "☆".repeat(Math.max(0, n - stars));
@@ -376,7 +448,7 @@ function setupVoice() {
         q.value = text;
       }, (finalText, err) => {
         mic.classList.remove("on", "thinking");
-        q.placeholder = placeholder;
+        q.placeholder = quizMode ? QUIZ_PH : placeholder;
         if (finalText) {
           q.value = finalText;
           via = "voice";
