@@ -87,6 +87,15 @@
   </section>
 
   <section>
+    <h2>🎯 Quiz results</h2>
+    <div class="cards" id="quizChapters"></div>
+    <table>
+      <thead><tr><th>When</th><th>Question</th><th>Her answer</th><th>Result</th><th>Correct answer</th></tr></thead>
+      <tbody id="quizRows"></tbody>
+    </table>
+  </section>
+
+  <section>
     <h2>Questions and which path answered them</h2>
     <div class="cards" id="cards"></div>
     <table>
@@ -280,8 +289,29 @@ document.getElementById("chapterUp").onsubmit = async (e) => {
   if (r.ok) { e.target.files.value = ""; loadJobs(); }
 };
 
+async function loadQuiz() {
+  const r = await fetch("/api/quiz/results");
+  if (!r.ok) return;
+  const { attempts, chapters } = await r.json();
+  const label = (k) => (BOOKS.find(b => b.key === k) || {}).label || k;
+  const box = document.getElementById("quizChapters"); box.innerHTML = "";
+  if (!chapters.length) box.appendChild(mk("div", { className: "card" }, "No quizzes yet."));
+  for (const c of chapters) {
+    box.appendChild(mk("div", { className: "card" },
+      `${label(c.book)} ch ${c.chapter}: ${c.first_try}/${c.questions} right first time · ${when(c.last)}`));
+  }
+  const body = document.getElementById("quizRows"); body.innerHTML = "";
+  for (const a of attempts.slice(0, 60)) {
+    const tr = mk("tr");
+    const res = { yes: "✅ right", partly: "🙂 partly", no: "❌ wrong" }[a.verdict] || a.verdict;
+    tr.append(td(when(a.ts)), td(a.question, "q"), td(a.given), td(res + (a.try_no > 1 ? " (2nd try)" : "")), td(a.expected, "q"));
+    body.appendChild(tr);
+  }
+}
+
 (async () => {
   await loadBooks();
+  loadQuiz();
   loadLog(); loadReview(); loadJobs();
 })();
 </script>

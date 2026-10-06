@@ -258,3 +258,34 @@ def test_collect_all(monkeypatch, capsys):
     assert "indexed 1 chapters" in out
     assert batch.pending_batches() == []
     assert processed_path("orchids-eng-gv-t1", 1).exists()
+
+
+def test_subject_variants_merge_into_one(tmp_path):
+    from buddy.books import SUBJECTS, canonical_subject
+    from buddy.rag import store
+
+    assert canonical_subject("hindi-3rd-language", "Hindi 3rd Language") == "hindi"
+    assert canonical_subject("x", "हिंदी") == "hindi"
+    assert canonical_subject("general-science", "General Science") == "evs"
+    assert canonical_subject("computer-science", "Computer Science") is None
+    assert canonical_subject("horticulture", "Horticulture") is None
+    assert orchids.subject_of({"subject_name": "Hindi 3rd Language"}) == ("hindi", "Hindi 3rd Language")
+
+    # A book imported earlier as its own "Hindi 3rd Language" subject is merged on load,
+    # and its indexed chunks follow.
+    f = books._custom_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps([{
+        "subject": "hindi-3rd-language", "grade": 4, "title": "Textbook_Hin_G4_T1",
+        "language": "Hindi", "text_mode": "image", "ncert_code": None, "chapters": None,
+        "custom_key": "orchids-hindi-3rd-tb-t1", "name": "Hindi 3rd Language Textbook (Term 1)",
+        "subject_label": "Hindi 3rd Language"}]))
+    store.add_chunks(["h1"], ["पेड़ हमें छाया देते हैं"], [{
+        "subject": "hindi-3rd-language", "book": "orchids-hindi-3rd-tb-t1", "kind": "text",
+        "source": "ncert", "cite": "x", "page": 1, "pages": "1"}])
+    books.load_custom_books()
+    assert books.BOOKS["orchids-hindi-3rd-tb-t1"].subject == "hindi"
+    assert "hindi-3rd-language" not in SUBJECTS
+    assert list(SUBJECTS).count("hindi") == 1
+    assert store.get_by({"subject": "hindi"})[0].id == "h1"
+    assert json.loads(f.read_text())[0]["subject"] == "hindi"  # saved, so it stays merged

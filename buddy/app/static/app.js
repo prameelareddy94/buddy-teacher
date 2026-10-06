@@ -219,7 +219,7 @@ document.getElementById("quizBtn").onclick = async () => {
   for (const c of chs) {
     const prefix = c.grade === 4 ? "" : `Class ${c.grade} · `;
     const b = el("button", "ghost", `${prefix}${c.chapter}. ${c.title}`); b.type = "button";
-    b.onclick = () => { acts.remove(); runQuiz(c.book, c.chapter); };
+    b.onclick = () => { acts.remove(); m.textContent = `🎯 Quiz time: ${prefix}${c.chapter}. ${c.title}`; runQuiz(c.book, c.chapter); };
     acts.appendChild(b);
   }
   m.appendChild(acts); chat.appendChild(m); scroll();
@@ -228,29 +228,118 @@ document.getElementById("quizBtn").onclick = async () => {
 async function runQuiz(book, chapter) {
   const fd = new FormData(); fd.append("book", book); fd.append("chapter", chapter);
   const wait = el("div", "msg buddy typing-msg", "Making your quiz… "); wait.appendChild(dots()); chat.appendChild(wait); scroll();
-  const { questions } = await (await fetch("/api/quiz", { method: "POST", body: fd })).json();
+  let questions = [];
+  try { ({ questions } = await (await fetch("/api/quiz", { method: "POST", body: fd })).json()); } catch (e) { /* below */ }
   wait.remove();
-  let i = 0;
+  if (!questions || !questions.length) { chat.appendChild(el("div", "msg buddy", "I couldn't make a quiz for this chapter yet 😕")); scroll(); return; }
+  const say = (t) => { if (Voice.autoRead) Voice.speak(t); };
+  let i = 0, score = 0, stars = 0;
+
+  async function check(qq, given, tryNo) {
+    const f = new FormData();
+    Object.entries({ book, chapter, kind: qq.kind, question: qq.question, expected: qq.answer, given, try_no: tryNo })
+      .forEach(([k, v]) => f.append(k, v));
+    try { return await (await fetch("/api/quiz/answer", { method: "POST", body: f })).json(); }
+    catch (e) { return { verdict: "no", feedback: "Hmm, I couldn't check that. Try again?" }; }
+  }
+
   const next = () => {
-    if (i >= questions.length) {
-      const done = el("div", "msg buddy", "🎉 Quiz done! Great work!");
-      chat.appendChild(done); scroll(); confetti(done);
-      if (Voice.autoRead) Voice.speak("Quiz done! Great work!");
-      return;
-    }
+    if (i >= questions.length) return finish();
     const qq = questions[i++];
-    const m = el("div", "msg buddy", `Q${i}. ${qq.question}`);
-    const hint = el("div", "hint", "💡 " + qq.hint); hint.hidden = true;
-    const ans = el("div", "answer hidden", "✅ " + qq.answer);
-    const src = el("div", "source", qq.source ? "📖 " + qq.source : "");
+    const m = el("div", "msg buddy quiz-card");
+    m.append(el("div", "quiz-progress", `Question ${i} of ${questions.length}`), el("div", "quiz-q", qq.question));
+    const hint = el("div", "hint", "💡 " + (qq.hint || "Think about what you read in the chapter.")); hint.hidden = true;
+    const feedback = el("div", "quiz-feedback"); feedback.hidden = true;
+    const src = el("div", "source", qq.source ? "📖 " + qq.source : ""); src.hidden = true;
     const acts = el("div", "actions");
-    const say = (t) => { if (Voice.autoRead) Voice.speak(t); };
-    const hb = el("button", "ghost", "💡 Hint"); hb.type = "button"; hb.onclick = () => { hint.hidden = false; hb.remove(); scroll(); say(qq.hint); };
-    const ab = el("button", "secondary", "👀 Answer"); ab.type = "button"; ab.onclick = () => { ans.classList.remove("hidden"); ab.remove(); scroll(); say(qq.answer); };
-    const nb = el("button", "", "Next ➡️"); nb.type = "button"; nb.onclick = () => { nb.remove(); next(); };
-    acts.append(hb, ab, nb);
-    m.append(hint, ans, src, acts); chat.appendChild(m); scroll();
-    say(`Question ${i}. ${qq.question}`);
+    let tries = 0, done = false;
+
+    const showResult = (ok, partly, text) => {
+      feedback.hidden = false;
+      feedback.className = "quiz-feedback " + (ok ? "good" : partly ? "partly" : "bad");
+      feedback.textContent = text;
+      scroll();
+    };
+    const finishQuestion = (ok) => {
+      done = true;
+      if (ok) { score++; if (tries === 1) stars++; }
+      src.hidden = false;
+      const nb = el("button", "", i < questions.length ? "Next ➡️" : "See my score 🏆"); nb.type = "button";
+      nb.onclick = () => { nb.remove(); next(); };
+      acts.replaceChildren(nb);
+      scroll();
+    };
+    const handle = async (given, btn) => {
+      if (done) return;
+      tries++;
+      const r = await check(qq, given, tries);
+      if (r.verdict === "yes") {
+        if (btn) btn.classList.add("right");
+        showResult(true, false, "✅ " + (r.feedback || "Great job!") + (qq.explanation ? " " + qq.explanation : ""));
+        confetti(btn || feedback); say(r.feedback || "Great job!");
+        finishQuestion(true);
+      } else if (tries < 2) {
+        if (btn) { btn.classList.add("wrong"); btn.disabled = true; }
+        hint.hidden = false;
+        showResult(false, r.verdict === "partly", (r.verdict === "partly" ? "🙂 " : "🤔 ") +
+          (r.feedback || "Almost!") + " Try again!");
+        say((r.feedback || "Almost!") + " Here is a hint. " + (qq.hint || ""));
+      } else {
+        if (btn) btn.classList.add("wrong");
+        const right = m.querySelectorAll(".opt");
+        right.forEach(o => { if (o.dataset.value === qq.answer) o.classList.add("right"); o.disabled = true; });
+        showResult(false, false, `💛 Good try! The answer is: ${qq.answer}.` + (qq.explanation ? " " + qq.explanation : ""));
+        say(`Good try! The answer is ${qq.answer}. ${qq.explanation || ""}`);
+        finishQuestion(false);
+      }
+    };
+
+    if (qq.options && qq.options.length) {
+      const grid = el("div", "opts");
+      qq.options.forEach((o, k) => {
+        const b = el("button", "opt", o); b.type = "button"; b.dataset.value = o;
+        b.style.setProperty("--k", k);
+        b.onclick = () => handle(o, b);
+        grid.appendChild(b);
+      });
+      m.append(grid);
+    } else {
+      const row = el("form", "quiz-answer");
+      const input = el("input"); input.placeholder = "Type or tap 🎤 to say your answer"; input.enterKeyHint = "done";
+      const micB = el("button", "mic-mini", "🎤"); micB.type = "button"; micB.title = "Say it";
+      const go = el("button", "secondary", "Check ✔"); go.type = "submit";
+      micB.hidden = !Voice.canListen;
+      micB.onclick = () => {
+        if (Voice.listening()) { Voice.stopListening(); return; }
+        Voice.listen(subject, (t) => { input.value = t; }, (t) => {
+          micB.classList.remove("on");
+          if (t) { input.value = t; row.requestSubmit(); }
+        }, (st) => { micB.classList.toggle("on", st === "listening"); });
+      };
+      row.onsubmit = async (e) => { e.preventDefault(); if (!input.value.trim()) return; go.disabled = true; await handle(input.value); go.disabled = false; if (!done) { input.value = ""; input.focus(); } };
+      row.append(input, micB, go);
+      m.append(row);
+    }
+    const hb = el("button", "ghost", "💡 Hint"); hb.type = "button";
+    hb.onclick = () => { hint.hidden = false; hb.remove(); scroll(); say(qq.hint); };
+    acts.append(hb);
+    m.append(hint, feedback, src, acts);
+    chat.appendChild(m); scroll();
+    say([`Question ${i}. ${qq.question}`, ...(qq.options || [])]);
+  };
+
+  const finish = () => {
+    const n = questions.length;
+    const card = el("div", "msg buddy quiz-score");
+    const starRow = "⭐".repeat(stars) + "☆".repeat(Math.max(0, n - stars));
+    const cheer = score === n ? "Perfect! You're a superstar! 🌟" : score >= n / 2 ? "Well done! Keep it up! 💪" : "Good practice! Let's read the chapter again and try once more 📖";
+    card.append(el("div", "big-score", `${score} / ${n}`), el("div", "stars", starRow), el("div", "", cheer));
+    const again = el("button", "secondary", "🔁 Another quiz"); again.type = "button";
+    again.onclick = () => { again.remove(); runQuiz(book, chapter); };
+    const acts = el("div", "actions"); acts.append(again); card.append(acts);
+    chat.appendChild(card); scroll();
+    if (score >= n / 2) confetti(card);
+    say(`You got ${score} out of ${n}! ${cheer}`);
   };
   next();
 }

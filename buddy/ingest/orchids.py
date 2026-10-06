@@ -50,7 +50,9 @@ def subject_of(entry: dict) -> tuple[str, str] | None:
         label = raw                      # an acronym like IDP or EVS
     else:
         label = raw.title() if raw.isupper() or raw.islower() else raw
-    key = SUBJECT_NAMES.get(raw.lower())
+    from buddy.books import canonical_subject
+
+    key = SUBJECT_NAMES.get(raw.lower()) or canonical_subject(raw.lower(), raw)
     if key:
         return key, label
     slug = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")[:30]

@@ -53,6 +53,18 @@ CREATE TABLE IF NOT EXISTS jobs (
     cost_usd REAL DEFAULT 0,
     finished REAL
 );
+CREATE TABLE IF NOT EXISTS quiz_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL,
+    book TEXT,
+    chapter INTEGER,
+    kind TEXT,
+    question TEXT,
+    expected TEXT,
+    given TEXT,
+    verdict TEXT,                 -- yes | partly | no
+    try_no INTEGER
+);
 CREATE TABLE IF NOT EXISTS review_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     started REAL NOT NULL,
@@ -197,3 +209,19 @@ def update_job(job_id: int, **fields) -> None:
 
 def list_jobs(limit: int = 30) -> list[dict]:
     return _rows("SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,))
+
+
+# ---------- quiz attempts ----------
+
+def log_attempt(**fields) -> int:
+    fields.setdefault("ts", time.time())
+    return _insert("quiz_attempts", fields)
+
+
+def quiz_results(limit: int = 300) -> dict:
+    rows = _rows("SELECT * FROM quiz_attempts ORDER BY id DESC LIMIT ?", (limit,))
+    chapters = _rows(
+        "SELECT book, chapter, COUNT(DISTINCT question) questions, "
+        "SUM(verdict = 'yes' AND try_no = 1) first_try, MAX(ts) last "
+        "FROM quiz_attempts GROUP BY book, chapter ORDER BY last DESC LIMIT 30")
+    return {"attempts": rows, "chapters": chapters}

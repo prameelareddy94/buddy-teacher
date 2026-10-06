@@ -96,16 +96,23 @@ def test_api_key_never_served():
         assert "test-key" not in c.get(path).text
 
 
-def test_quiz_from_book_bank():
+def test_quiz_from_book_bank_without_claude(monkeypatch):
+    from buddy.app import quiz
+
+    def no_key():
+        raise RuntimeError("ANTHROPIC_API_KEY is not set")
+
+    monkeypatch.setattr(quiz, "async_client", no_key)
     seed()
     c = TestClient(app)
     login(c, "kid")
     qs = c.post("/api/quiz", data={"book": "evs", "chapter": "1"}).json()["questions"]
     assert len(qs) == 2
-    assert {q["question"] for q in qs} == {"What do plants need to make food?",
-                                           "Trees give homes to birds. True or false?"}
-    assert all(q["hint"] and q["answer"] and q["source"].startswith("EVS") for q in qs)
-
+    by_q = {q["question"]: q for q in qs}
+    tf = by_q["Trees give homes to birds. True or false?"]
+    assert tf["kind"] == "true_false" and tf["options"] == ["True", "False"] and tf["answer"] == "True"
+    short = by_q["What do plants need to make food?"]
+    assert short["kind"] == "short" and short["options"] == []
 
 def test_voice_question_is_logged(monkeypatch):
     seed()

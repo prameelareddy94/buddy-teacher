@@ -240,6 +240,26 @@ async def quiz(book: str = Form(...), chapter: int = Form(...), _: str = Depends
     return {"questions": await make_quiz(book, chapter)}
 
 
+@app.post("/api/quiz/answer")
+async def quiz_answer(
+    book: str = Form(""), chapter: int = Form(0), kind: str = Form(...),
+    question: str = Form(...), expected: str = Form(...), given: str = Form(""),
+    try_no: int = Form(1), _: str = Depends(need_kid),
+):
+    from buddy.app.quiz import check_answer
+
+    result = await check_answer(kind, question, expected, given[:500])
+    logs.log_attempt(book=book, chapter=chapter, kind=kind, question=question[:500],
+                     expected=expected[:500], given=given[:500], verdict=result["verdict"],
+                     try_no=try_no)
+    return result
+
+
+@app.get("/api/quiz/results")
+def quiz_results(_: str = Depends(need_parent)):
+    return logs.quiz_results()
+
+
 @app.post("/api/feedback")
 def feedback(id: int = Form(...), vote: str = Form(...), _: str = Depends(need_kid)):
     if vote not in ("up", "down"):

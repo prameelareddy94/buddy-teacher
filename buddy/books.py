@@ -13,7 +13,7 @@ kept in data/books.json. They are "school" books: search ranks them above NCERT.
 """
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 CURRENT_GRADE = 4
 
@@ -88,6 +88,28 @@ def _custom_file():
     return get_settings().data_dir / "books.json"
 
 
+# School subject names that are really one of Buddy's subjects ("Hindi 3rd Language",
+# "English Language", "Mathematics", "General Science" ...).
+_SUBJECT_WORDS = [
+    ("hindi", ("hindi", "हिंदी", "हिन्दी")),
+    ("kannada", ("kannada", "ಕನ್ನಡ")),
+    ("english", ("english",)),
+    ("maths", ("math",)),
+    ("evs", ("evs", "science", "environment")),
+]
+
+
+def canonical_subject(subject: str, label: str | None = "") -> str | None:
+    """Buddy's subject key for a school subject name, or None if it's a new subject."""
+    text = f"{subject} {label or ''}".lower()
+    if "computer" in text:
+        return None  # "Computer Science" is its own subject
+    for key, words in _SUBJECT_WORDS:
+        if any(w in text for w in words):
+            return key
+    return None
+
+
 def load_custom_books() -> None:
     """(Re)load school books from data/books.json into BOOKS."""
     for k in [k for k in BOOKS if k not in BUILTIN_KEYS]:
@@ -95,12 +117,38 @@ def load_custom_books() -> None:
     SUBJECTS.clear()
     SUBJECTS.update(BUILTIN_SUBJECTS)
     f = _custom_file()
-    if f.exists():
-        for d in json.loads(f.read_text()):
-            b = Book(**d)
-            BOOKS[b.key] = b
-            if b.subject not in SUBJECTS:
-                SUBJECTS[b.subject] = b.subject_label or b.subject.title()
+    if not f.exists():
+        return
+    remapped = []
+    for d in json.loads(f.read_text()):
+        b = Book(**d)
+        if b.subject not in BUILTIN_SUBJECTS:
+            canon = canonical_subject(b.subject, b.subject_label)
+            if canon:  # imported earlier as its own subject: merge it
+                b = replace(b, subject=canon, subject_label=None)
+                remapped.append(b)
+        BOOKS[b.key] = b
+        if b.subject not in SUBJECTS:
+            SUBJECTS[b.subject] = b.subject_label or b.subject.title()
+    if remapped:
+        f.write_text(json.dumps([asdict(b) for b in BOOKS.values() if b.is_school],
+                                ensure_ascii=False, indent=2))
+        _retag_chunks({b.key: b.subject for b in remapped})
+
+
+def _retag_chunks(book_subjects: dict[str, str]) -> None:
+    """Point already indexed chunks of these books at their merged subject."""
+    try:
+        from buddy.rag import store
+        col = store.get_collection()
+        for key, subject in book_subjects.items():
+            got = col.get(where={"book": key}, include=["metadatas"])
+            if got["ids"]:
+                metas = [{**m, "subject": subject} for m in got["metadatas"]]
+                col.update(ids=got["ids"], metadatas=metas)
+        store._touch()
+    except Exception:  # search index not there yet: nothing to retag
+        pass
 
 
 def add_school_book(key: str, subject: str, name: str, grade: int = CURRENT_GRADE,
@@ -112,6 +160,9 @@ def add_school_book(key: str, subject: str, name: str, grade: int = CURRENT_GRAD
         raise ValueError("Book key: lowercase letters, digits and dashes, e.g. orchids-evs")
     if key in BUILTIN_KEYS:
         raise ValueError(f"{key} is an NCERT book key; pick another, e.g. orchids-{subject}")
+    canon = canonical_subject(subject, subject_label)
+    if subject not in BUILTIN_SUBJECTS and canon:
+        subject, subject_label = canon, None
     if subject not in SUBJECTS:
         # A new subject from her school (e.g. horticulture): needs a display name.
         if not subject_label or not re.fullmatch(r"[a-z][a-z0-9-]{1,30}", subject):
