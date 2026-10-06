@@ -82,7 +82,7 @@ async function loadMe() {
 }
 
 // A Buddy bubble with hint shown first and the answer behind a button.
-function buddyBubble(reveal = false) {
+function buddyBubble(reveal = false, mount = null) {
   const m = el("div", "msg buddy");
   const typing = dots();
   const hint = el("div", "hint"); hint.hidden = true;
@@ -98,7 +98,7 @@ function buddyBubble(reveal = false) {
   };
   actions.appendChild(show);
   m.append(typing, hint, answer, source, actions);
-  chat.appendChild(m); scroll();
+  if (mount) mount(m); else { chat.appendChild(m); scroll(); }
   return {
     update(p, streaming) {
       last = p;
@@ -115,7 +115,7 @@ function buddyBubble(reveal = false) {
       const shown = !answer.classList.contains("hidden");
       Voice.speak(shown ? [last.hint, ...answerParts()] : [last.hint || last.answer]);
     },
-    addActions(id) {
+    addActions(id, feedback = null) {
       if (Voice.canSpeak) {
         const say = el("button", "ghost thumb", "🔊"); say.type = "button"; say.title = "Read it to me";
         say.onclick = () => this.readAloud();
@@ -138,6 +138,10 @@ function buddyBubble(reveal = false) {
         }
       };
       up.onclick = () => vote("up"); down.onclick = () => vote("down");
+      if (feedback) {  // already voted (from history)
+        up.disabled = down.disabled = true;
+        (feedback > 0 ? up : down).classList.add("on");
+      }
       actions.append(b, up, down);
     },
   };
@@ -393,4 +397,65 @@ function setupVoice() {
 }
 Voice.init().then(setupVoice);
 
+// ---- History: her earlier questions stay on screen ----
+const historyBox = el("div", "history");
+chat.insertBefore(historyBox, chat.firstElementChild ? chat.firstElementChild.nextSibling : null);
+let oldestId = null;
+
+function dayLabel(ts) {
+  const d = new Date(ts * 1000), today = new Date();
+  const days = Math.round((new Date(today.toDateString()) - new Date(d.toDateString())) / 86400000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  return d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" });
+}
+
+function renderHistoryItem(r, mount) {
+  const me = el("div", "msg me past", (r.had_image ? "📷 " : "") + (r.via === "voice" ? "🎤 " : "") + r.question);
+  mount(me);
+  const bubble = buddyBubble(true, mount);
+  bubble.update({ hint: r.hint || "", answer: r.answer || "", source: r.source || "" }, false);
+  bubble.addActions(r.id, r.feedback);
+}
+
+async function loadHistory() {
+  const url = "/api/history?limit=20" + (oldestId ? "&before_id=" + oldestId : "");
+  let data;
+  try { data = await (await fetch(url)).json(); } catch (e) { return; }
+  if (!data.items || !data.items.length) return;
+  const items = data.items.slice().reverse();          // oldest first
+  oldestId = data.items[data.items.length - 1].id;
+  const frag = document.createDocumentFragment();
+  let lastDay = null;
+  for (const r of items) {
+    const day = dayLabel(r.ts);
+    if (day !== lastDay) { frag.appendChild(el("div", "day", day)); lastDay = day; }
+    renderHistoryItem(r, (node) => frag.appendChild(node));
+  }
+  const firstOld = !historyBox.firstChild;
+  const keep = chat.scrollHeight - chat.scrollTop;    // stay in place when adding older ones
+  const moreBtn = historyBox.querySelector(".more");
+  if (moreBtn) moreBtn.remove();
+  // the newer block starts with the same day the older block ends with: keep one label
+  const firstLabel = historyBox.querySelector(".day");
+  if (firstLabel && firstLabel === historyBox.firstElementChild && firstLabel.textContent === lastDay) {
+    firstLabel.remove();
+  }
+  historyBox.insertBefore(frag, historyBox.firstChild);
+  if (data.more) {
+    const b = el("button", "ghost more", "⬆️ Show earlier questions"); b.type = "button";
+    b.onclick = () => loadHistory();
+    historyBox.insertBefore(b, historyBox.firstChild);
+  }
+  chat.style.scrollBehavior = "auto";               // jump, don't glide through history
+  if (firstOld) {
+    historyBox.appendChild(el("div", "day now", "Now"));
+    scroll();
+  } else {
+    chat.scrollTop = chat.scrollHeight - keep;
+  }
+  requestAnimationFrame(() => { chat.style.scrollBehavior = ""; });
+}
+
 loadMe();
+loadHistory();

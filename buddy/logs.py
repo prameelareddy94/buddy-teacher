@@ -145,6 +145,41 @@ def recent(limit: int = 200) -> list[dict]:
     return _rows("SELECT * FROM questions ORDER BY id DESC LIMIT ?", (limit,))
 
 
+def history(limit: int = 30, before_id: int | None = None) -> list[dict]:
+    """Her own chat, newest first (no quizzes, no failed answers)."""
+    sql = ("SELECT id, ts, question, subject, hint, answer, source, via, had_image, feedback, "
+           "route FROM questions WHERE route != 'error' AND question NOT LIKE '[quiz]%' "
+           "AND reason NOT LIKE '%api_error%' AND COALESCE(answer, '') != ''")
+    args: tuple = ()
+    if before_id:
+        sql += " AND id < ?"
+        args = (before_id,)
+    return _rows(sql + " ORDER BY id DESC LIMIT ?", (*args, limit))
+
+
+def _qnorm(q: str) -> str:
+    import re
+    q = re.sub(r"[^\w\s]", " ", q.lower())
+    return re.sub(r"\s+", " ", q).strip()
+
+
+def find_previous_answer(question: str, subject: str | None, max_age_days: int = 30) -> dict | None:
+    """An earlier good answer to the same question (same words, same subject)."""
+    target = _qnorm(question)
+    if not target:
+        return None
+    since = time.time() - max_age_days * 86400
+    rows = _rows(
+        "SELECT * FROM questions WHERE ts > ? AND route NOT IN ('error') AND had_image = 0 "
+        "AND reason NOT LIKE '%api_error%' AND reason != 'explain_more' "
+        "AND COALESCE(feedback, 0) != -1 AND COALESCE(answer, '') != '' AND fix_id IS NULL "
+        "AND question NOT LIKE '[quiz]%' ORDER BY id DESC LIMIT 1000", (since,))
+    for r in rows:
+        if _qnorm(r["question"]) == target and (subject is None or r["subject"] == subject):
+            return r
+    return None
+
+
 def flagged_unfixed(limit: int = 100) -> list[dict]:
     return _rows("SELECT * FROM questions WHERE feedback = -1 AND fix_id IS NULL "
                  "ORDER BY id DESC LIMIT ?", (limit,))

@@ -98,7 +98,7 @@ def test_thumbs_down_routes_similar_questions_to_claude(monkeypatch):
     again = run(router.Ask(Q, subject="evs"))[-1]
     assert again["route"] == "claude_haiku" and again["reason"] == "similar_flagged"
     fixes.feedback(done["id"], 1)  # changing to 👍 clears the flag
-    assert run(router.Ask(Q, subject="evs"))[-1]["route"] == "local"
+    assert run(router.Ask(Q, subject="evs"))[-1]["route"] == "cached"  # asked before: reused
 
 
 def test_parent_fix_is_used_then_undone(monkeypatch):

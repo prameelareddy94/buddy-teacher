@@ -27,7 +27,7 @@ from buddy.kid_rules import (EXPLAIN_MORE_FORMAT, NOT_IN_BOOK, RULES, TEXT_FORMA
                              parse_sections, user_prompt)
 from buddy.llm import ollama
 from buddy.llm.claude import async_client
-from buddy.logs import get_question, log_question
+from buddy.logs import find_previous_answer, get_question, log_question
 from buddy.rag import store
 from buddy.rag.store import Hit
 
@@ -62,7 +62,8 @@ def normalize_blanks(question: str) -> tuple[str, str]:
 WHY_HOW = re.compile(r"\b(why|how)\b|क्यों|कैसे|ಏಕೆ|ಯಾಕೆ|ಹೇಗೆ", re.IGNORECASE)
 MULTI_TOPIC_BAND = 0.05  # topics scoring within this of the best count as "equally relevant"
 
-LOCAL, HAIKU, SONNET, VERIFIED = "local", "claude_haiku", "claude_sonnet", "verified"
+LOCAL, HAIKU, SONNET, VERIFIED, CACHED = ("local", "claude_haiku", "claude_sonnet", "verified",
+                                          "cached")
 
 
 @dataclass
@@ -218,6 +219,7 @@ async def answer(ask: Ask) -> AsyncIterator[dict]:
 
     question, query = normalize_blanks(question)
     ask.question = question
+
     if ask.image:
         seen, u = await _transcribe(ask)
         usage_in += u.input_tokens
@@ -244,6 +246,22 @@ async def answer(ask: Ask) -> AsyncIterator[dict]:
             output_tokens=0, cost_usd=0.0, **parsed)
         yield {"type": "done", "id": qid, "route": VERIFIED, "reason": "verified_match", **parsed}
         return
+
+    # Asked this before (and no fix applies)? Reuse that answer: instant and free.
+    if not ask.image and not ask.explain_more_of and not r.verified:
+        prev = find_previous_answer(question, ask.subject)
+        if prev:
+            parsed = {"hint": prev["hint"] or "", "answer": prev["answer"], "source": prev["source"] or ""}
+            yield {"type": "meta", "route": CACHED, "reason": "asked_before"}
+            yield {"type": "delta", "text": f"HINT: {parsed['hint']}\nANSWER: {parsed['answer']}\n"
+                                            f"SOURCE: {parsed['source']}"}
+            qid = log_question(
+                question=question, subject=ask.subject, route=CACHED, reason="asked_before",
+                model=f"answer #{prev['id']}", top_score=prev["top_score"], via=ask.via,
+                had_image=0, latency_ms=int((time.monotonic() - t0) * 1000), input_tokens=0,
+                output_tokens=0, cost_usd=0.0, **parsed)
+            yield {"type": "done", "id": qid, "route": CACHED, "reason": "asked_before", **parsed}
+            return
 
     decision = decide(ask, hits, similar_flagged=r.flagged is not None)
     yield {"type": "meta", "route": decision.route, "reason": decision.reason}

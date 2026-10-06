@@ -62,7 +62,7 @@ def candidates(limit: int) -> list[dict]:
     return logs._rows(
         f"""SELECT * FROM questions
             WHERE COALESCE(reviewed, 0) = 0 AND fix_id IS NULL
-              AND route NOT IN ('error', 'verified') AND question NOT LIKE '[quiz]%'
+              AND route NOT IN ('error', 'verified', 'cached') AND question NOT LIKE '[quiz]%'
               AND COALESCE(feedback, 0) != 1
               AND (feedback = -1 OR reason IN ({marks}) OR top_score < ?
                    OR answer LIKE '%not in your book%')

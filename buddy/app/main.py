@@ -173,6 +173,13 @@ async def ask(
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+@app.get("/api/history")
+def chat_history(before_id: int | None = None, limit: int = 30, _: str = Depends(need_kid)):
+    """Her earlier questions and answers, newest first, for showing the chat again."""
+    rows = logs.history(min(max(limit, 1), 100), before_id)
+    return {"items": rows, "more": len(rows) == min(max(limit, 1), 100)}
+
+
 @app.get("/api/voice")
 def voice_config(_: str = Depends(need_kid)):
     """Which speech engines the server offers; the page falls back to the browser's."""

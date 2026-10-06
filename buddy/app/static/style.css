@@ -78,5 +78,6 @@ form.ask textarea { flex: 1; resize: none; border-radius: 16px; border: 2px soli
 .tag.local { background: #cdeccd; color: #1d5b2e; }
 .tag.claude_haiku { background: #fde2c8; color: #7a3d0b; }
 .tag.claude_sonnet { background: #e2d7fb; color: #43237f; }
+.tag.cached, .tag.verified { background: #d6ecff; color: #0d4a80; }
 @media (max-width: 600px) { body { font-size: 18px; } .msg { max-width: 96%; } }
 .muted { color: var(--muted); }

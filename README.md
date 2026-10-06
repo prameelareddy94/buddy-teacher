@@ -224,6 +224,18 @@ local model was overruled, hover over the answer to see what it had said.
 - **The microphone needs HTTPS** (Tailscale Serve) or `localhost`. The parent view marks
   spoken questions with 🎤 and shows exactly what Whisper heard.
 
+## Chat history and repeat questions
+
+- **Her chat comes back when she opens Buddy.** The latest 20 questions load, grouped by
+  day, with **⬆️ Show earlier questions** for older ones. Answers are shown open, like
+  notes, with 🔊 / Explain more / 👍👎.
+- **Asking the same thing again is instant and free.** It's the same words in the same
+  subject within 30 days, and the saved answer is reused (route `cached` in the parent
+  view). Some answers are never reused:
+  - answers she marked 👎
+  - answers that a review or a parent has fixed (the fix is used instead)
+  - error replies, photo questions, and "Explain more"
+
 ## Fixing answers that didn't help
 
 1. **👍 / 👎 on every answer.** A 👎 flags the question. Until it's fixed, similar
