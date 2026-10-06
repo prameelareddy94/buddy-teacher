@@ -89,13 +89,14 @@ def _custom_file():
 
 
 # School subject names that are really one of Buddy's subjects ("Hindi 3rd Language",
-# "English Language", "Mathematics", "General Science" ...).
+# "English Language", "Mathematics", "Environmental Studies"). Science subjects (Natural
+# Science, Social Science…) are kept as their own subjects.
 _SUBJECT_WORDS = [
     ("hindi", ("hindi", "हिंदी", "हिन्दी")),
     ("kannada", ("kannada", "ಕನ್ನಡ")),
     ("english", ("english",)),
     ("maths", ("math",)),
-    ("evs", ("evs", "science", "environment")),
+    ("evs", ("evs", "environmental")),
 ]
 
 
@@ -127,6 +128,14 @@ def load_custom_books() -> None:
             if canon:  # imported earlier as its own subject: merge it
                 b = replace(b, subject=canon, subject_label=None)
                 remapped.append(b)
+        elif b.is_school and (label := _school_subject(b.name)):
+            # Merged into one of Buddy's subjects by an older rule (e.g. "Natural Science"
+            # into EVS) but really its own subject: split it out again.
+            if canonical_subject(label.lower(), label) != b.subject:
+                slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")[:30]
+                if slug and slug[0].isalpha() and slug not in BUILTIN_SUBJECTS:
+                    b = replace(b, subject=slug, subject_label=label)
+                    remapped.append(b)
         BOOKS[b.key] = b
         if b.subject not in SUBJECTS:
             SUBJECTS[b.subject] = b.subject_label or b.subject.title()
@@ -134,6 +143,16 @@ def load_custom_books() -> None:
         f.write_text(json.dumps([asdict(b) for b in BOOKS.values() if b.is_school],
                                 ensure_ascii=False, indent=2))
         _retag_chunks({b.key: b.subject for b in remapped})
+
+
+_BOOK_KINDS = r"(Textbook|Workbook|Coursebook|Reading|Grammar|Writing|Literature|Listening)"
+
+
+def _school_subject(name: str | None) -> str | None:
+    """The school's subject name from an imported book's name: "Natural Science Textbook
+    (Term 1)" -> "Natural Science". None for names not made by the importer."""
+    m = re.match(rf"^(.+?)\s+{_BOOK_KINDS}\b", name or "")
+    return m.group(1).strip() if m else None
 
 
 def _retag_chunks(book_subjects: dict[str, str]) -> None:

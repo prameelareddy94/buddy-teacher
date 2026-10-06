@@ -113,7 +113,7 @@ def test_new_school_subjects_become_subjects(tmp_path, capsys):
     rows = {r["key"]: r for r in orchids.plan(hort)}
     assert rows["orchids-horticulture-tb-annual"]["name"] == "Horticulture Textbook (Annual)"
     assert rows["orchids-idp-tb-t1"]["name"] == "IDP Textbook (Term 1)"
-    assert rows["orchids-evs-tb-t1"]["name"] == "Science Textbook (Term 1)"  # maps onto EVS
+    assert rows["orchids-science-tb-t1"]["name"] == "Science Textbook (Term 1)"  # own subject
 
     haiku = FakeHaiku([{"number": 1, "title": "Soil", "start_page": 1}])
     orchids.import_one(rows["orchids-horticulture-tb-annual"], client=haiku,
@@ -266,7 +266,8 @@ def test_subject_variants_merge_into_one(tmp_path):
 
     assert canonical_subject("hindi-3rd-language", "Hindi 3rd Language") == "hindi"
     assert canonical_subject("x", "हिंदी") == "hindi"
-    assert canonical_subject("general-science", "General Science") == "evs"
+    assert canonical_subject("general-science", "General Science") is None
+    assert canonical_subject("environmental-studies", "Environmental Studies") == "evs"
     assert canonical_subject("computer-science", "Computer Science") is None
     assert canonical_subject("horticulture", "Horticulture") is None
     assert orchids.subject_of({"subject_name": "Hindi 3rd Language"}) == ("hindi", "Hindi 3rd Language")
@@ -289,3 +290,30 @@ def test_subject_variants_merge_into_one(tmp_path):
     assert list(SUBJECTS).count("hindi") == 1
     assert store.get_by({"subject": "hindi"})[0].id == "h1"
     assert json.loads(f.read_text())[0]["subject"] == "hindi"  # saved, so it stays merged
+
+
+def test_natural_science_merged_by_old_rule_is_split_out_again():
+    from buddy.books import SUBJECTS
+    from buddy.rag import store
+
+    f = books._custom_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    common = {"grade": 4, "language": "English", "text_mode": "image", "ncert_code": None,
+              "chapters": None, "subject_label": None}
+    f.write_text(json.dumps([
+        {**common, "subject": "evs", "title": "Textbook_NS_G4_T1", "custom_key": "orchids-ns-tb-t1",
+         "name": "Natural Science Textbook (Term 1)"},
+        {**common, "subject": "hindi", "title": "Textbook_Hin_G4_T1", "custom_key": "orchids-hin-tb-t1",
+         "name": "Hindi 3rd Language Textbook (Term 1)", "language": "Hindi"},
+        {**common, "subject": "evs", "title": "", "custom_key": "school-evs", "name": "EVS book"},
+    ]))
+    store.add_chunks(["ns1"], ["Plants need sunlight"], [{
+        "subject": "evs", "book": "orchids-ns-tb-t1", "kind": "text", "source": "ncert",
+        "cite": "x", "page": 1, "pages": "1"}])
+    books.load_custom_books()
+    assert books.BOOKS["orchids-ns-tb-t1"].subject == "natural-science"
+    assert SUBJECTS["natural-science"] == "Natural Science"
+    assert books.BOOKS["orchids-hin-tb-t1"].subject == "hindi"      # stays merged
+    assert books.BOOKS["school-evs"].subject == "evs"                # parent-made book untouched
+    assert store.get_by({"subject": "natural-science"})[0].id == "ns1"
+    assert orchids.subject_of({"subject_name": "Natural Science"}) == ("natural-science", "Natural Science")

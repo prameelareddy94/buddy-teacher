@@ -29,7 +29,7 @@ SUBJECT_NAMES = {
     "kannada": "kannada", "kan": "kannada",
     "mathematics": "maths", "maths": "maths", "math": "maths", "mat": "maths",
     "evs": "evs", "environmental studies": "evs", "environmental science": "evs",
-    "science": "evs", "social studies": "evs", "sst": "evs",
+    # Natural Science, Social Studies, … are their own subjects at her school.
 }
 SUBJECT_LABEL = {"english": "English", "hindi": "Hindi", "kannada": "Kannada",
                  "maths": "Maths", "evs": "EVS"}

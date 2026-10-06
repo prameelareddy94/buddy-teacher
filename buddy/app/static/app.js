@@ -21,6 +21,18 @@ const SUBJECT_LOOK = {
   maths: { ic: "🔢", c: "#ff9f45" }, hindi: { ic: "अ", c: "#ff5d8f" }, kannada: { ic: "ಕ", c: "#a78bff" },
 };
 
+// Icons for her school's own subjects, by name.
+function lookFor(name) {
+  const n = name.toLowerCase();
+  const rules = [[/science|scien/, "🔬", "#52c7ff"], [/social|history|geograph|civic/, "🌍", "#4fe0b6"],
+    [/horti|garden|plant/, "🪴", "#7bd88f"], [/financ|money|fin\b|\bfl\b/, "💰", "#ffd76a"],
+    [/computer|coding|ict/, "💻", "#a78bff"], [/art|draw|craft/, "🎨", "#ff9f45"],
+    [/music|dance/, "🎵", "#ff5d8f"], [/idp|project|inter/, "🧩", "#52c7ff"],
+    [/sport|yoga|physical|pe\b/, "⚽", "#4fe0b6"], [/value|moral|life skill/, "💛", "#ffd76a"]];
+  for (const [re, ic, c] of rules) if (re.test(n)) return { ic, c };
+  return { ic: "⭐", c: "#a78bff" };
+}
+
 function dots() {
   const t = el("div", "typing");
   t.append(el("span"), el("span"), el("span"));
@@ -71,7 +83,7 @@ async function loadMe() {
   const box = document.getElementById("subjects");
   const all = [{ key: "", label: "All" }, ...me.subjects];
   for (const s of all) {
-    const look = SUBJECT_LOOK[s.key] || { ic: "⭐", c: "#a78bff" };
+    const look = SUBJECT_LOOK[s.key] || lookFor(s.key + " " + s.label);
     const b = el("button", "chip" + (s.key === subject ? " on" : ""));
     b.style.setProperty("--c", look.c);
     b.append(el("span", "ic", look.ic), el("span", "", s.label));
